@@ -1,0 +1,34 @@
+[tool.poetry]
+name = "gh-folder-download"
+version = "0.1.0"
+description = "A command line application (CLI) to download only a specific folder without downloading the full repository implemented with Python using Typer and GitHub API."
+authors = ["Leynier Gutiérrez González <leynier41@gmail.com>"]
+homepage = "https://github.com/leynier/gh-folder-download"
+repository = "https://github.com/leynier/gh-folder-download"
+documentation = "https://github.com/leynier/gh-folder-download"
+readme = "README.md"
+license = "MIT"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent"
+]
+
+[tool.poetry.scripts]
+gh-folder-download = "gh_folder_download.main:app"
+
+[tool.poetry.dependencies]
+python = "^3.7"
+PyGithub = "^1.55"
+typer = {extras = ["all"], version = "^0.6.1"}
+wget = "^3.2"
+
+[tool.poetry.dev-dependencies]
+black = "^22.6.0"
+flake8 = "^5.0.4"
+isort = "^5.10.1"
+pre-commit = "^2.20.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
