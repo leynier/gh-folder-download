@@ -11,6 +11,17 @@
 
 A command line application (CLI) to download only a specific folder without downloading the full repository implemented with Python using Typer and GitHub API.
 
+## Getting Started
+
+Install `gh-folder-download` with:
+
+- `pip install gh-folder-download`
+- `poetry add gh-folder-download`
+- `conda install gh-folder-download`
+- Any other way that allows you to install the package from PyPI.
+
+## Commands
+
 ```bash
 Usage: gh-folder-download [OPTIONS]
 
@@ -27,3 +38,12 @@ Options:
                                   copy it or customize the installation.
   --help                          Show this message and exit.
 ```
+
+## GitHub Repository URL format
+
+- `https://github.com/{user_or_organization}/{repository_name}`
+  > Download the full repository from the default branch.
+- `https://github.com/{user_or_organization}/{repository_name}/tree/{branch}`
+  > Download the full repository from the specified branch.
+- `https://github.com/{user_or_organization}/{repository_name}/tree/{branch}/{folder_path}`
+  > Download the specified folder from the specified branch.
