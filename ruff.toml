@@ -1,0 +1,8 @@
+exclude = ["mesirve/data/migrations"]
+line-length = 88
+
+[format]
+line-ending = "lf"
+
+[lint.per-file-ignores]
+"__init__.py" = ["F401"]
