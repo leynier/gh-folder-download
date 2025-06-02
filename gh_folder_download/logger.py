@@ -4,7 +4,6 @@ Logging configuration for gh-folder-download.
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 from rich.console import Console
 from rich.logging import RichHandler
@@ -17,7 +16,7 @@ class GHFolderLogger:
     def __init__(
         self,
         level: str = "INFO",
-        log_file: Optional[Path] = None,
+        log_file: Path | None = None,
         quiet: bool = False,
     ):
         self.console = Console()
@@ -88,7 +87,7 @@ class GHFolderLogger:
         # Also log to file handlers
         self.logger.info(f"PROGRESS: {message}")
 
-    def download_start(self, file_path: str, file_size: Optional[int] = None) -> None:
+    def download_start(self, file_path: str, file_size: int | None = None) -> None:
         """Log download start."""
         size_info = f" ({self._format_size(file_size)})" if file_size else ""
         if not self.quiet:
@@ -155,7 +154,7 @@ class GHFolderLogger:
         )
 
     @staticmethod
-    def _format_size(size_bytes: Optional[int]) -> str:
+    def _format_size(size_bytes: int | None) -> str:
         """Format file size in human readable format."""
         if size_bytes is None:
             return "Unknown"
@@ -169,12 +168,12 @@ class GHFolderLogger:
 
 
 # Global logger instance
-_logger: Optional[GHFolderLogger] = None
+_logger: GHFolderLogger | None = None
 
 
 def setup_logger(
     level: str = "INFO",
-    log_file: Optional[Path] = None,
+    log_file: Path | None = None,
     quiet: bool = False,
 ) -> GHFolderLogger:
     """Setup and return the global logger instance."""

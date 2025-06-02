@@ -4,7 +4,6 @@ Input validation utilities for gh-folder-download.
 
 import re
 from pathlib import Path
-from typing import Optional, Tuple
 from urllib.parse import urlparse
 
 from github import Github, GithubException
@@ -32,7 +31,7 @@ class InputValidator:
     def __init__(self):
         self.logger = get_logger()
 
-    def validate_github_url(self, url: str) -> Tuple[str, str, Optional[str], str]:
+    def validate_github_url(self, url: str) -> tuple[str, str, str | None, str]:
         """
         Validate and parse GitHub URL with enhanced validation.
 
@@ -165,7 +164,7 @@ class InputValidator:
         except (OSError, PermissionError) as e:
             raise ValidationError(f"Invalid output path: {e}")
 
-    def validate_github_token(self, token: Optional[str]) -> Optional[str]:
+    def validate_github_token(self, token: str | None) -> str | None:
         """
         Validate GitHub token format and basic connectivity.
 
@@ -222,7 +221,7 @@ class InputValidator:
             self.logger.warning(f"Token validation failed: {e}")
             return token  # Return token anyway
 
-    def validate_log_file_path(self, log_file: Optional[Path]) -> Optional[Path]:
+    def validate_log_file_path(self, log_file: Path | None) -> Path | None:
         """
         Validate log file path.
 

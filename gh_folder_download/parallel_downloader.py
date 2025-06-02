@@ -7,7 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import aiohttp
 
@@ -24,7 +24,7 @@ class DownloadTask:
     file_path: str
     download_url: str
     local_path: Path
-    expected_size: Optional[int]
+    expected_size: int | None
     sha: str
     repo_full_name: str
     ref: str
@@ -36,7 +36,7 @@ class DownloadResult:
 
     task: DownloadTask
     success: bool
-    error: Optional[str] = None
+    error: str | None = None
     duration: float = 0.0
     bytes_downloaded: int = 0
     from_cache: bool = False
@@ -100,8 +100,8 @@ class ParallelDownloader:
 
     async def download_files(
         self,
-        download_tasks: List[DownloadTask],
-    ) -> List[DownloadResult]:
+        download_tasks: list[DownloadTask],
+    ) -> list[DownloadResult]:
         """
         Download multiple files in parallel.
 
@@ -371,7 +371,7 @@ class ParallelDownloader:
         with ThreadPoolExecutor(max_workers=1) as executor:
             await loop.run_in_executor(executor, add_to_cache)
 
-    def _update_stats(self, results: List[DownloadResult], total_time: float) -> None:
+    def _update_stats(self, results: list[DownloadResult], total_time: float) -> None:
         """Update download statistics."""
         self.stats["total_downloads"] = len(results)
         self.stats["total_time"] = total_time
@@ -385,7 +385,7 @@ class ParallelDownloader:
             else:
                 self.stats["failed_downloads"] += 1
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get download statistics."""
         stats = self.stats.copy()
 
@@ -415,7 +415,7 @@ class ParallelDownloader:
         if self.cache:
             self.cache.clear_cache()
 
-    def get_cache_stats(self) -> Dict[str, Any]:
+    def get_cache_stats(self) -> dict[str, Any]:
         """Get cache statistics."""
         if self.cache:
             return self.cache.get_cache_stats()
@@ -423,11 +423,11 @@ class ParallelDownloader:
 
 
 def run_parallel_downloads(
-    download_tasks: List[DownloadTask],
+    download_tasks: list[DownloadTask],
     max_concurrent_downloads: int = 5,
     verify_integrity: bool = True,
     use_cache: bool = True,
-) -> List[DownloadResult]:
+) -> list[DownloadResult]:
     """
     Convenience function to run parallel downloads.
 

@@ -5,7 +5,7 @@ Rate limiting system for GitHub API calls in gh-folder-download.
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 from github import Github, GithubException
 
@@ -62,8 +62,8 @@ class GitHubRateLimiter:
         self._lock = threading.Lock()
 
         # Rate limit information
-        self._core_rate_limit: Optional[RateLimitInfo] = None
-        self._search_rate_limit: Optional[RateLimitInfo] = None
+        self._core_rate_limit: RateLimitInfo | None = None
+        self._search_rate_limit: RateLimitInfo | None = None
         self._last_update = 0
 
         # Adaptive delay settings
@@ -205,7 +205,7 @@ class GitHubRateLimiter:
 
         self._last_request_time = time.time()
 
-    def get_rate_limit_status(self) -> Dict[str, Any]:
+    def get_rate_limit_status(self) -> dict[str, Any]:
         """Get current rate limit status for monitoring."""
         if self._should_update_rate_limit():
             self._update_rate_limit_info()
@@ -283,7 +283,7 @@ class GitHubRateLimiter:
 class RateLimitedGitHubClient:
     """GitHub client wrapper with automatic rate limiting."""
 
-    def __init__(self, token: Optional[str] = None, buffer_requests: int = 100):
+    def __init__(self, token: str | None = None, buffer_requests: int = 100):
         """
         Initialize rate-limited GitHub client.
 
@@ -327,7 +327,7 @@ class RateLimitedGitHubClient:
         """Get repository with rate limiting."""
         return self.make_api_call(self.github.get_repo, full_name)
 
-    def get_rate_limit_status(self) -> Dict[str, Any]:
+    def get_rate_limit_status(self) -> dict[str, Any]:
         """Get rate limit status."""
         return self.rate_limiter.get_rate_limit_status()
 

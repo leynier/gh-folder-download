@@ -4,7 +4,7 @@ Retry mechanism with exponential backoff for gh-folder-download.
 
 import time
 from functools import wraps
-from typing import Any, Callable, Optional, cast
+from typing import Any, Callable, cast
 
 from github import GithubException
 
@@ -54,7 +54,7 @@ class RetryHandler:
         504,  # Gateway timeout
     )
 
-    def __init__(self, config: Optional[RetryConfig] = None):
+    def __init__(self, config: RetryConfig | None = None):
         self.config = config or RetryConfig()
         self.logger = get_logger()
 
@@ -62,7 +62,7 @@ class RetryHandler:
         self,
         func: Callable,
         *args,
-        config: Optional[RetryConfig] = None,
+        config: RetryConfig | None = None,
         **kwargs,
     ) -> Any:
         """
@@ -210,7 +210,7 @@ def with_retry(
 class DownloadRetryHandler(RetryHandler):
     """Specialized retry handler for download operations."""
 
-    def __init__(self, config: Optional[RetryConfig] = None):
+    def __init__(self, config: RetryConfig | None = None):
         # More aggressive retry for downloads
         default_config = RetryConfig(
             max_attempts=5,
@@ -255,7 +255,7 @@ class DownloadRetryHandler(RetryHandler):
 class APIRetryHandler(RetryHandler):
     """Specialized retry handler for GitHub API operations."""
 
-    def __init__(self, config: Optional[RetryConfig] = None):
+    def __init__(self, config: RetryConfig | None = None):
         # Conservative retry for API calls
         default_config = RetryConfig(
             max_attempts=3,

@@ -6,7 +6,7 @@ import json
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from .logger import get_logger
 
@@ -21,7 +21,7 @@ class CacheEntry:
         size: int,
         last_modified: str,
         download_time: float,
-        checksums: Optional[Dict[str, str]] = None,
+        checksums: dict[str, str] | None = None,
     ):
         self.file_path = file_path
         self.sha = sha
@@ -30,7 +30,7 @@ class CacheEntry:
         self.download_time = download_time
         self.checksums = checksums or {}
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert cache entry to dictionary for serialization."""
         return {
             "file_path": self.file_path,
@@ -42,7 +42,7 @@ class CacheEntry:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "CacheEntry":
+    def from_dict(cls, data: dict[str, Any]) -> "CacheEntry":
         """Create cache entry from dictionary."""
         return cls(
             file_path=data["file_path"],
@@ -61,7 +61,7 @@ class CacheEntry:
 class DownloadCache:
     """Intelligent cache for downloaded files."""
 
-    def __init__(self, cache_dir: Optional[Path] = None):
+    def __init__(self, cache_dir: Path | None = None):
         self.logger = get_logger()
 
         # Default cache directory
@@ -72,7 +72,7 @@ class DownloadCache:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         self.cache_file = self.cache_dir / "cache_metadata.json"
-        self.cache_data: Dict[str, CacheEntry] = {}
+        self.cache_data: dict[str, CacheEntry] = {}
 
         self._load_cache()
 
@@ -173,7 +173,7 @@ class DownloadCache:
         github_sha: str,
         github_size: int,
         local_file_path: Path,
-        checksums: Optional[Dict[str, str]] = None,
+        checksums: dict[str, str] | None = None,
     ) -> None:
         """
         Add a file to the cache.
@@ -217,7 +217,7 @@ class DownloadCache:
         repo_full_name: str,
         file_path: str,
         ref: str,
-    ) -> Optional[Dict[str, str]]:
+    ) -> dict[str, str] | None:
         """Get cached checksums for a file if available."""
         cache_key = self._get_cache_key(repo_full_name, file_path, ref)
 
@@ -254,7 +254,7 @@ class DownloadCache:
 
         return len(keys_to_remove)
 
-    def get_cache_stats(self) -> Dict[str, Any]:
+    def get_cache_stats(self) -> dict[str, Any]:
         """Get cache statistics."""
         if not self.cache_data:
             return {

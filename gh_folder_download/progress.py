@@ -5,7 +5,7 @@ Advanced progress tracking for gh-folder-download using Rich Progress.
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from rich.console import Console
 from rich.live import Live
@@ -62,7 +62,7 @@ class DownloadStats:
         return self.download_speed_bps / (1024 * 1024)
 
     @property
-    def eta_seconds(self) -> Optional[float]:
+    def eta_seconds(self) -> float | None:
         """Estimate time to completion in seconds."""
         if self.download_speed_bps == 0 or self.total_bytes == 0:
             return None
@@ -107,7 +107,7 @@ class DownloadStats:
 class ProgressTracker:
     """Advanced progress tracking with Rich Progress bars."""
 
-    def __init__(self, console: Optional[Console] = None, quiet: bool = False):
+    def __init__(self, console: Console | None = None, quiet: bool = False):
         """
         Initialize progress tracker.
 
@@ -121,7 +121,7 @@ class ProgressTracker:
 
         # Progress tracking
         self.stats = DownloadStats()
-        self.file_tasks: Dict[str, TaskID] = {}
+        self.file_tasks: dict[str, TaskID] = {}
         self.individual_progress = {}
 
         # Single integrated progress display
@@ -140,8 +140,8 @@ class ProgressTracker:
             disable=quiet,
         )
 
-        self.overall_task: Optional[TaskID] = None
-        self.live: Optional[Live] = None
+        self.overall_task: TaskID | None = None
+        self.live: Live | None = None
 
     def start_session(self, total_files: int, total_bytes: int):
         """Start a download session."""
@@ -300,7 +300,7 @@ class ProgressTracker:
 
         return summary_table
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get current statistics as dictionary."""
         return {
             "total_files": self.stats.total_files,
@@ -375,7 +375,7 @@ class SimpleProgressTracker:
             f"{self.stats.elapsed_time:.1f}s, {self.stats.format_speed()}"
         )
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get current statistics."""
         return {
             "total_files": self.stats.total_files,

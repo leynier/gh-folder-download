@@ -6,7 +6,6 @@ from os.path import exists, join
 from pathlib import Path
 from shutil import rmtree
 from time import time
-from typing import List, Optional
 
 import typer
 from github import Github, GithubException
@@ -29,18 +28,18 @@ app = Typer()
 
 @app.command()
 def download_command(
-    url: Optional[str] = Option(None, help="Repository URL"),
+    url: str | None = Option(None, help="Repository URL"),
     output: Path = Option(
         ".",
         help="Output folder",
         file_okay=False,
         writable=True,
     ),
-    token: Optional[str] = Option(None, help="GitHub token"),
+    token: str | None = Option(None, help="GitHub token"),
     force: bool = Option(False, help="Remove existing output folder if it exists"),
     verbose: bool = Option(False, "--verbose", "-v", help="Enable verbose logging"),
     quiet: bool = Option(False, "--quiet", "-q", help="Suppress output except errors"),
-    log_file: Optional[Path] = Option(None, help="Log to file"),
+    log_file: Path | None = Option(None, help="Log to file"),
     verify_integrity: bool = Option(True, help="Verify file integrity after download"),
     max_retries: int = Option(
         3,
@@ -92,7 +91,7 @@ def download_command(
         help="Show advanced progress bars and real-time statistics",
     ),
     # Configuration options
-    config_file: Optional[Path] = Option(
+    config_file: Path | None = Option(
         None,
         help="Path to configuration file",
         exists=True,
@@ -103,27 +102,27 @@ def download_command(
         help="Create a sample configuration file and exit",
     ),
     # Filter options
-    include_extensions: Optional[List[str]] = Option(
+    include_extensions: list[str] | None = Option(
         None,
         help="Include only files with these extensions (e.g., --include-extensions .py .js)",
     ),
-    exclude_extensions: Optional[List[str]] = Option(
+    exclude_extensions: list[str] | None = Option(
         None,
         help="Exclude files with these extensions (e.g., --exclude-extensions .log .tmp)",
     ),
-    include_patterns: Optional[List[str]] = Option(
+    include_patterns: list[str] | None = Option(
         None,
         help="Include files matching these glob patterns (e.g., --include-patterns 'src/**' 'docs/**')",
     ),
-    exclude_patterns: Optional[List[str]] = Option(
+    exclude_patterns: list[str] | None = Option(
         None,
         help="Exclude files matching these glob patterns (e.g., --exclude-patterns '**/test/**' '**/*.pyc')",
     ),
-    min_size: Optional[str] = Option(
+    min_size: str | None = Option(
         None,
         help="Minimum file size (e.g., --min-size 1KB, 1MB)",
     ),
-    max_size: Optional[str] = Option(
+    max_size: str | None = Option(
         None,
         help="Maximum file size (e.g., --max-size 10MB, 100KB)",
     ),
@@ -139,7 +138,7 @@ def download_command(
         False,
         help="Respect common .gitignore patterns",
     ),
-    filter_preset: Optional[str] = Option(
+    filter_preset: str | None = Option(
         None,
         help="Use a predefined filter preset (code-only, docs-only, config-only, no-tests, small-files, minimal)",
     ),
@@ -935,7 +934,7 @@ def download_file_with_verification(
         return False
 
 
-def _parse_size_string(size_str: str) -> Optional[int]:
+def _parse_size_string(size_str: str) -> int | None:
     """
     Parse a human-readable size string into bytes.
 

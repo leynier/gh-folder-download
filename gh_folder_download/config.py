@@ -5,7 +5,7 @@ Configuration management for gh-folder-download.
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field, validator
@@ -66,26 +66,26 @@ class FilterConfig(BaseModel):
     """File filtering configuration."""
 
     # Extension filters
-    include_extensions: List[str] = Field(
+    include_extensions: list[str] = Field(
         default_factory=list, description="Include only these extensions"
     )
-    exclude_extensions: List[str] = Field(
+    exclude_extensions: list[str] = Field(
         default_factory=list, description="Exclude these extensions"
     )
 
     # Size filters
-    min_size_bytes: Optional[int] = Field(
+    min_size_bytes: int | None = Field(
         default=None, ge=0, description="Minimum file size in bytes"
     )
-    max_size_bytes: Optional[int] = Field(
+    max_size_bytes: int | None = Field(
         default=None, ge=0, description="Maximum file size in bytes"
     )
 
     # Pattern filters
-    include_patterns: List[str] = Field(
+    include_patterns: list[str] = Field(
         default_factory=list, description="Include files matching these patterns"
     )
-    exclude_patterns: List[str] = Field(
+    exclude_patterns: list[str] = Field(
         default_factory=list, description="Exclude files matching these patterns"
     )
 
@@ -131,7 +131,7 @@ class GHFolderDownloadConfig(BaseModel):
     """Main configuration model."""
 
     # Authentication
-    github_token: Optional[str] = Field(
+    github_token: str | None = Field(
         default=None, description="GitHub personal access token"
     )
 
@@ -163,9 +163,9 @@ class ConfigManager:
         """Initialize configuration manager."""
         self.logger = get_logger()
         self.config: GHFolderDownloadConfig = GHFolderDownloadConfig()
-        self.config_file_path: Optional[Path] = None
+        self.config_file_path: Path | None = None
 
-    def get_config_paths(self) -> List[Path]:
+    def get_config_paths(self) -> list[Path]:
         """Get possible configuration file paths in order of priority."""
         paths = []
 
@@ -184,7 +184,7 @@ class ConfigManager:
 
         return paths
 
-    def load_config(self, config_file: Optional[Path] = None) -> GHFolderDownloadConfig:
+    def load_config(self, config_file: Path | None = None) -> GHFolderDownloadConfig:
         """
         Load configuration from file, environment variables, and defaults.
 
@@ -200,6 +200,7 @@ class ConfigManager:
         # Load from file
         if config_file:
             config_data.update(self._load_from_file(config_file))
+            self.config_file_path = config_file
         else:
             # Try default locations
             for path in self.get_config_paths():
@@ -223,7 +224,7 @@ class ConfigManager:
 
         return self.config
 
-    def _load_from_file(self, file_path: Path) -> Dict[str, Any]:
+    def _load_from_file(self, file_path: Path) -> dict[str, Any]:
         """Load configuration from YAML file."""
         try:
             self.logger.debug(f"Loading config from: {file_path}")
@@ -235,7 +236,7 @@ class ConfigManager:
             self.logger.warning(f"Failed to load config from {file_path}: {e}")
             return {}
 
-    def _load_from_env(self) -> Dict[str, Any]:
+    def _load_from_env(self) -> dict[str, Any]:
         """Load configuration from environment variables."""
         config_data = {}
         env_mappings = {
@@ -262,7 +263,7 @@ class ConfigManager:
 
         return config_data
 
-    def _set_nested_value(self, data: Dict[str, Any], path: str, value: Any) -> None:
+    def _set_nested_value(self, data: dict[str, Any], path: str, value: Any) -> None:
         """Set a nested value in a dictionary using dot notation."""
         keys = path.split(".")
         current = data
@@ -294,7 +295,7 @@ class ConfigManager:
         # String value
         return value
 
-    def save_config(self, file_path: Optional[Path] = None) -> bool:
+    def save_config(self, file_path: Path | None = None) -> bool:
         """
         Save current configuration to file.
 
@@ -326,7 +327,7 @@ class ConfigManager:
             self.logger.error(f"Failed to save configuration: {e}")
             return False
 
-    def create_sample_config(self, file_path: Optional[Path] = None) -> bool:
+    def create_sample_config(self, file_path: Path | None = None) -> bool:
         """
         Create a sample configuration file with comments.
 
@@ -411,11 +412,11 @@ ui:
             self.logger.error(f"Failed to create sample configuration: {e}")
             return False
 
-    def get_effective_config(self) -> Dict[str, Any]:
+    def get_effective_config(self) -> dict[str, Any]:
         """Get the effective configuration as a dictionary."""
         return self.config.dict()
 
-    def validate_config(self) -> List[str]:
+    def validate_config(self) -> list[str]:
         """
         Validate current configuration and return list of issues.
 
@@ -451,16 +452,16 @@ def get_config() -> GHFolderDownloadConfig:
     return config_manager.config
 
 
-def load_config(config_file: Optional[Path] = None) -> GHFolderDownloadConfig:
+def load_config(config_file: Path | None = None) -> GHFolderDownloadConfig:
     """Load configuration from file and environment."""
     return config_manager.load_config(config_file)
 
 
-def save_config(file_path: Optional[Path] = None) -> bool:
+def save_config(file_path: Path | None = None) -> bool:
     """Save current configuration to file."""
     return config_manager.save_config(file_path)
 
 
-def create_sample_config(file_path: Optional[Path] = None) -> bool:
+def create_sample_config(file_path: Path | None = None) -> bool:
     """Create a sample configuration file."""
     return config_manager.create_sample_config(file_path)

@@ -5,7 +5,6 @@ File filtering system for gh-folder-download.
 import fnmatch
 import re
 from pathlib import Path
-from typing import List, Optional
 
 from github.ContentFile import ContentFile
 
@@ -35,7 +34,7 @@ class FileFilter:
         ]
 
         # Load gitignore rules if requested
-        self.gitignore_rules: List[str] = []
+        self.gitignore_rules: list[str] = []
         if config.respect_gitignore:
             self.gitignore_rules = self._load_gitignore_patterns()
 
@@ -130,8 +129,8 @@ class FileFilter:
     def should_include_file(
         self,
         file_path: str,
-        file_size: Optional[int] = None,
-        content_file: Optional[ContentFile] = None,
+        file_size: int | None = None,
+        content_file: ContentFile | None = None,
     ) -> bool:
         """
         Determine if a file should be included based on all filters.
@@ -224,7 +223,7 @@ class FileFilter:
 
         return True
 
-    def _check_size_filters(self, file_size: Optional[int]) -> bool:
+    def _check_size_filters(self, file_size: int | None) -> bool:
         """Check file size filters."""
         if file_size is None:
             return True  # Can't filter if size is unknown
@@ -242,7 +241,7 @@ class FileFilter:
         return True
 
     def _check_binary_filter(
-        self, file_path: str, content_file: Optional[ContentFile] = None
+        self, file_path: str, content_file: ContentFile | None = None
     ) -> bool:
         """Check if file should be excluded as binary."""
         if not self.config.exclude_binary:
@@ -260,7 +259,7 @@ class FileFilter:
 
         return True
 
-    def _check_large_file_filter(self, file_size: Optional[int]) -> bool:
+    def _check_large_file_filter(self, file_size: int | None) -> bool:
         """Check large file filter (10MB default)."""
         if not self.config.exclude_large_files:
             return True
@@ -290,7 +289,7 @@ class FileFilter:
         regex_pattern = fnmatch.translate(pattern)
         return re.compile(regex_pattern)
 
-    def _load_gitignore_patterns(self) -> List[str]:
+    def _load_gitignore_patterns(self) -> list[str]:
         """Load gitignore patterns from common gitignore rules."""
         # Since we're downloading from GitHub, we can't access the actual .gitignore file
         # So we use common gitignore patterns

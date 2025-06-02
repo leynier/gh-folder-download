@@ -4,7 +4,7 @@ File integrity verification for gh-folder-download.
 
 import hashlib
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from .logger import get_logger
 
@@ -21,7 +21,7 @@ class FileIntegrityChecker:
     def __init__(self):
         self.logger = get_logger()
 
-    def calculate_checksums(self, file_path: Path) -> Dict[str, str]:
+    def calculate_checksums(self, file_path: Path) -> dict[str, str]:
         """
         Calculate multiple checksums for a file.
 
@@ -67,7 +67,7 @@ class FileIntegrityChecker:
         except (OSError, IOError) as e:
             raise IntegrityError(f"Failed to calculate checksums for {file_path}: {e}")
 
-    def verify_file_size(self, file_path: Path, expected_size: Optional[int]) -> bool:
+    def verify_file_size(self, file_path: Path, expected_size: int | None) -> bool:
         """
         Verify that file size matches expected size.
 
@@ -145,7 +145,7 @@ class FileIntegrityChecker:
         self.logger.debug(f"{algorithm.upper()} checksum verified successfully")
         return True
 
-    def verify_file_content(self, file_path: Path) -> Dict[str, Any]:
+    def verify_file_content(self, file_path: Path) -> dict[str, Any]:
         """
         Perform basic content verification checks.
 
@@ -221,10 +221,10 @@ class FileIntegrityChecker:
     def comprehensive_verify(
         self,
         file_path: Path,
-        expected_size: Optional[int] = None,
-        expected_checksum: Optional[str] = None,
+        expected_size: int | None = None,
+        expected_checksum: str | None = None,
         checksum_algorithm: str = "sha256",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Perform comprehensive file verification.
 
@@ -293,7 +293,7 @@ class FileIntegrityChecker:
             self.logger.error(f"File integrity verification failed: {e}")
             raise
 
-    def create_integrity_report(self, file_path: Path) -> Dict[str, Any]:
+    def create_integrity_report(self, file_path: Path) -> dict[str, Any]:
         """
         Create a comprehensive integrity report for a file.
 
@@ -346,8 +346,8 @@ class FileIntegrityChecker:
 # Convenience function for quick integrity check
 def quick_integrity_check(
     file_path: Path,
-    expected_size: Optional[int] = None,
-    expected_checksum: Optional[str] = None,
+    expected_size: int | None = None,
+    expected_checksum: str | None = None,
 ) -> bool:
     """
     Quick integrity check for a file.
