@@ -960,7 +960,8 @@ def _parse_size_string(size_str: str) -> int | None:
     # Try to extract number and unit
     import re
 
-    match = re.match(r"^(\d*\.?\d+)\s*([KMGT]?B?)$", size_str)
+    # Fixed regex: requires at least one digit, properly handles decimal numbers
+    match = re.match(r"^(\d+(?:\.\d+)?)\s*([KMGT]?B?)$", size_str)
     if not match:
         return None
 
@@ -968,6 +969,9 @@ def _parse_size_string(size_str: str) -> int | None:
 
     try:
         number = float(number_str)
+        # Ensure positive number
+        if number < 0:
+            return None
     except ValueError:
         return None
 

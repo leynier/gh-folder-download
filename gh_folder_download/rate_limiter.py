@@ -113,7 +113,9 @@ class GitHubRateLimiter:
     def _should_update_rate_limit(self) -> bool:
         """Check if rate limit info should be updated."""
         # Update every 30 seconds or if we don't have info
-        return self._core_rate_limit is None or time.time() - self._last_update > 30
+        # Protected access to _last_update to prevent race conditions
+        with self._lock:
+            return self._core_rate_limit is None or time.time() - self._last_update > 30
 
     def _calculate_adaptive_delay(self, rate_limit: RateLimitInfo) -> float:
         """Calculate adaptive delay based on current rate limit status."""

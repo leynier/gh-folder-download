@@ -25,8 +25,8 @@ class InputValidator:
         r"^https://github\.com/([a-zA-Z0-9._-]+)/([a-zA-Z0-9._-]+)(?:/tree/([a-zA-Z0-9._/-]+))?(?:/(.+))?$"
     )
 
-    # Valid GitHub username/org pattern
-    GITHUB_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9._-]+$")
+    # Valid GitHub username/org pattern - must start and end with alphanumeric
+    GITHUB_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$")
 
     def __init__(self):
         self.logger = get_logger()
@@ -194,12 +194,24 @@ class InputValidator:
         # GitHub token patterns
         # Classic personal access tokens: ghp_xxxx (40 chars total)
         # Fine-grained personal access tokens: github_pat_xxxx
-        if not (
-            (token.startswith("ghp_") and len(token) == 40)
-            or (token.startswith("github_pat_") and len(token) >= 50)
-            or (len(token) == 40 and token.isalnum())  # Legacy format
-        ):
-            self.logger.warning("Token format doesn't match expected GitHub patterns")
+        # Legacy tokens: 40-char hex strings
+        is_valid_format = False
+
+        if token.startswith("ghp_") and len(token) == 40:
+            # Classic personal access token
+            is_valid_format = True
+        elif token.startswith("github_pat_") and len(token) >= 50:
+            # Fine-grained personal access token
+            is_valid_format = True
+        elif len(token) == 40:
+            # Legacy format - must be hexadecimal
+            is_valid_format = bool(re.match(r"^[a-fA-F0-9]{40}$", token))
+
+        if not is_valid_format:
+            raise ValidationError(
+                "Invalid GitHub token format. Expected: classic (ghp_...), "
+                "fine-grained (github_pat_...), or legacy (40-char hex) token."
+            )
 
         # Test token validity
         try:

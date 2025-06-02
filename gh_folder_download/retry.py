@@ -2,6 +2,7 @@
 Retry mechanism with exponential backoff for gh-folder-download.
 """
 
+import re
 import time
 from functools import wraps
 from typing import Any, Callable, cast
@@ -154,7 +155,12 @@ class RetryHandler:
             "rate limit",
         ]
 
-        return any(indicator in error_msg for indicator in temporary_indicators)
+        # Use word boundaries for more accurate matching
+
+        return any(
+            re.search(rf"\b{re.escape(indicator)}\b", error_msg)
+            for indicator in temporary_indicators
+        )
 
     def _calculate_delay(self, attempt: int, config: RetryConfig) -> float:
         """Calculate delay for the next retry attempt."""

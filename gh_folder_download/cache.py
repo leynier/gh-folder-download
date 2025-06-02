@@ -208,8 +208,9 @@ class DownloadCache:
         self.cache_data[cache_key] = cache_entry
         self.logger.debug(f"Added file to cache: {file_path}")
 
-        # Save cache periodically (every 10 new entries) or when cache is small
-        if len(self.cache_data) % 10 == 0 or len(self.cache_data) <= 5:
+        # Save cache more frequently to prevent data loss
+        # (every 5 new entries) or when cache is small
+        if len(self.cache_data) % 5 == 0 or len(self.cache_data) <= 3:
             self._save_cache()
 
     def get_cached_checksums(
@@ -283,4 +284,7 @@ class DownloadCache:
 
     def finalize(self) -> None:
         """Finalize cache operations (save to disk)."""
-        self._save_cache()
+        # Always save to ensure no data loss
+        if self.cache_data:
+            self._save_cache()
+            self.logger.debug("Cache finalized and saved")

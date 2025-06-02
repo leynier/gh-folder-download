@@ -3,6 +3,7 @@ Configuration management for gh-folder-download.
 """
 
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -146,10 +147,36 @@ class GHFolderDownloadConfig(BaseModel):
     @validator("github_token", pre=True)
     def validate_github_token(cls, v):
         """Validate GitHub token format."""
-        if v and not isinstance(v, str):
+        if not v:
+            return v
+
+        if not isinstance(v, str):
             raise ValueError("GitHub token must be a string")
-        if v and len(v) < 10:
-            raise ValueError("GitHub token appears to be too short")
+
+        v = v.strip()
+        if not v:
+            return None
+
+        # Check for valid GitHub token formats
+
+        is_valid_format = False
+
+        if v.startswith("ghp_") and len(v) == 40:
+            # Classic personal access token
+            is_valid_format = True
+        elif v.startswith("github_pat_") and len(v) >= 50:
+            # Fine-grained personal access token
+            is_valid_format = True
+        elif len(v) == 40:
+            # Legacy format - must be hexadecimal
+            is_valid_format = bool(re.match(r"^[a-fA-F0-9]{40}$", v))
+
+        if not is_valid_format:
+            raise ValueError(
+                "Invalid GitHub token format. Expected: classic (ghp_...), "
+                "fine-grained (github_pat_...), or legacy (40-char hex) token."
+            )
+
         return v
 
 
@@ -277,6 +304,9 @@ class ConfigManager:
 
     def _convert_env_value(self, value: str) -> Any:
         """Convert environment variable string to appropriate type."""
+        if not value:
+            return value
+
         # Boolean values
         if value.lower() in ("true", "1", "yes", "on"):
             return True
@@ -285,14 +315,22 @@ class ConfigManager:
 
         # Numeric values
         try:
+            # Check for float first (contains decimal point)
             if "." in value:
-                return float(value)
+                parsed_float = float(value)
+                # Ensure it's a valid number (not NaN or infinity)
+                if not (
+                    parsed_float != parsed_float or abs(parsed_float) == float("inf")
+                ):
+                    return parsed_float
             else:
-                return int(value)
-        except ValueError:
+                parsed_int = int(value)
+                return parsed_int
+        except (ValueError, OverflowError):
+            # If numeric parsing fails, continue to return as string
             pass
 
-        # String value
+        # String value (default)
         return value
 
     def save_config(self, file_path: Path | None = None) -> bool:
@@ -375,15 +413,15 @@ filters:
   # Extension filters (include/exclude specific file types)
   # include_extensions: [".py", ".js", ".md"]
   # exclude_extensions: [".log", ".tmp"]
-  
+
   # Size filters
   # min_size_bytes: 1024      # Minimum file size in bytes
   # max_size_bytes: 10485760  # Maximum file size in bytes (10MB)
-  
+
   # Pattern filters (glob patterns)
   # include_patterns: ["src/**", "docs/**"]
   # exclude_patterns: ["**/test/**", "**/*.pyc"]
-  
+
   # Special filters
   exclude_binary: false        # Exclude binary files
   exclude_large_files: false   # Exclude files larger than 10MB
