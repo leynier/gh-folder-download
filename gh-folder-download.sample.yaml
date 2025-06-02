@@ -1,0 +1,61 @@
+# gh-folder-download Configuration File
+# This file contains all available configuration options with their default values.
+# Remove the comments (#) and modify values as needed.
+
+# GitHub authentication
+# github_token: "your_github_token_here"
+
+# Download settings
+download:
+  max_concurrent: 5          # Maximum parallel downloads (1-20)
+  timeout: 30               # Download timeout in seconds (5-300)
+  chunk_size: 8192          # Download chunk size in bytes (1024-65536)
+  max_retries: 3            # Maximum retry attempts (1-10)
+  retry_delay: 1.0          # Base retry delay in seconds (0.1-30.0)
+  verify_integrity: true    # Verify file integrity after download
+  parallel_downloads: true  # Enable parallel downloads
+
+# Cache settings
+cache:
+  enabled: true             # Enable file caching
+  max_size_gb: 5.0         # Maximum cache size in GB (0.1-100.0)
+  max_age_days: 30         # Maximum cache age in days (1-365)
+  auto_cleanup: true       # Enable automatic cache cleanup
+
+# Rate limiting settings
+rate_limit:
+  enabled: true            # Enable GitHub API rate limiting
+  buffer: 100              # Rate limit buffer (10-1000)
+  aggressive_mode: false   # Use aggressive rate limiting
+
+# File filtering settings
+filters:
+  # Extension filters (include/exclude specific file types)
+  # include_extensions: [".py", ".js", ".md"]
+  # exclude_extensions: [".log", ".tmp"]
+  
+  # Size filters
+  # min_size_bytes: 1024      # Minimum file size in bytes
+  # max_size_bytes: 10485760  # Maximum file size in bytes (10MB)
+  
+  # Pattern filters (glob patterns)
+  # include_patterns: ["src/**", "docs/**"]
+  # exclude_patterns: ["**/test/**", "**/*.pyc"]
+  
+  # Special filters
+  exclude_binary: false        # Exclude binary files
+  exclude_large_files: false   # Exclude files larger than 10MB
+  respect_gitignore: false     # Respect .gitignore rules
+
+# Path settings
+paths:
+  default_output: "."          # Default output directory
+  create_subdirs: true         # Create subdirectories for organization
+  preserve_structure: true     # Preserve repository directory structure
+
+# User interface settings
+ui:
+  show_progress: true          # Show progress bars
+  verbosity: "INFO"           # Log level (DEBUG, INFO, WARNING, ERROR)
+  use_colors: true            # Use colored output
+  quiet_mode: false           # Enable quiet mode

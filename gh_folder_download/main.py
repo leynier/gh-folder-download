@@ -6,14 +6,17 @@ from os.path import exists, join
 from pathlib import Path
 from shutil import rmtree
 from time import time
-from typing import Optional
+from typing import List, Optional
 
+import typer
 from github import Github, GithubException
 from github.ContentFile import ContentFile
 from github.Repository import Repository
 from typer import Option, Typer
 
 from .cache import DownloadCache
+from .config import create_sample_config, load_config
+from .filters import create_file_filter, get_preset_filter
 from .integrity import FileIntegrityChecker, IntegrityError
 from .logger import get_logger, setup_logger
 from .parallel_downloader import DownloadTask, ParallelDownloader
@@ -26,7 +29,7 @@ app = Typer()
 
 @app.command()
 def download_command(
-    url: str = Option(..., help="Repository URL"),
+    url: Optional[str] = Option(None, help="Repository URL"),
     output: Path = Option(
         ".",
         help="Output folder",
@@ -88,16 +91,166 @@ def download_command(
         True,
         help="Show advanced progress bars and real-time statistics",
     ),
+    # Configuration options
+    config_file: Optional[Path] = Option(
+        None,
+        help="Path to configuration file",
+        exists=True,
+        readable=True,
+    ),
+    create_config: bool = Option(
+        False,
+        help="Create a sample configuration file and exit",
+    ),
+    # Filter options
+    include_extensions: Optional[List[str]] = Option(
+        None,
+        help="Include only files with these extensions (e.g., --include-extensions .py .js)",
+    ),
+    exclude_extensions: Optional[List[str]] = Option(
+        None,
+        help="Exclude files with these extensions (e.g., --exclude-extensions .log .tmp)",
+    ),
+    include_patterns: Optional[List[str]] = Option(
+        None,
+        help="Include files matching these glob patterns (e.g., --include-patterns 'src/**' 'docs/**')",
+    ),
+    exclude_patterns: Optional[List[str]] = Option(
+        None,
+        help="Exclude files matching these glob patterns (e.g., --exclude-patterns '**/test/**' '**/*.pyc')",
+    ),
+    min_size: Optional[str] = Option(
+        None,
+        help="Minimum file size (e.g., --min-size 1KB, 1MB)",
+    ),
+    max_size: Optional[str] = Option(
+        None,
+        help="Maximum file size (e.g., --max-size 10MB, 100KB)",
+    ),
+    exclude_binary: bool = Option(
+        False,
+        help="Exclude binary files",
+    ),
+    exclude_large_files: bool = Option(
+        False,
+        help="Exclude files larger than 10MB",
+    ),
+    respect_gitignore: bool = Option(
+        False,
+        help="Respect common .gitignore patterns",
+    ),
+    filter_preset: Optional[str] = Option(
+        None,
+        help="Use a predefined filter preset (code-only, docs-only, config-only, no-tests, small-files, minimal)",
+    ),
 ) -> None:
-    # Setup logging
+    # Handle config creation request
+    if create_config:
+        if create_sample_config():
+            logger = setup_logger()
+            logger.info("Sample configuration file created successfully")
+            return
+        else:
+            logger = setup_logger()
+            logger.error("Failed to create sample configuration file")
+            raise typer.Exit(1)
+
+    # Load configuration
+    config = load_config(config_file)
+
+    # Setup logging with config defaults
     if quiet:
         log_level = "ERROR"
     elif verbose:
         log_level = "DEBUG"
     else:
-        log_level = "INFO"
+        log_level = config.ui.verbosity
 
-    logger = setup_logger(level=log_level, log_file=log_file, quiet=quiet)
+    logger = setup_logger(
+        level=log_level, log_file=log_file, quiet=quiet or config.ui.quiet_mode
+    )
+
+    # Parse size filters
+    min_size_bytes = None
+    max_size_bytes = None
+
+    if min_size:
+        min_size_bytes = _parse_size_string(min_size)
+        if min_size_bytes is None:
+            logger.error(f"Invalid min-size format: {min_size}")
+            raise typer.Exit(1)
+
+    if max_size:
+        max_size_bytes = _parse_size_string(max_size)
+        if max_size_bytes is None:
+            logger.error(f"Invalid max-size format: {max_size}")
+            raise typer.Exit(1)
+
+    # Setup file filters
+    filter_config = config.filters.copy()
+
+    # Override config with CLI options if provided
+    if include_extensions:
+        filter_config.include_extensions = include_extensions
+    if exclude_extensions:
+        filter_config.exclude_extensions = exclude_extensions
+    if include_patterns:
+        filter_config.include_patterns = include_patterns
+    if exclude_patterns:
+        filter_config.exclude_patterns = exclude_patterns
+    if min_size_bytes is not None:
+        filter_config.min_size_bytes = min_size_bytes
+    if max_size_bytes is not None:
+        filter_config.max_size_bytes = max_size_bytes
+    if exclude_binary:
+        filter_config.exclude_binary = True
+    if exclude_large_files:
+        filter_config.exclude_large_files = True
+    if respect_gitignore:
+        filter_config.respect_gitignore = True
+
+    # Apply filter preset if specified
+    if filter_preset:
+        try:
+            preset_config = get_preset_filter(filter_preset)
+            # Merge preset with CLI overrides
+            if not include_extensions:
+                filter_config.include_extensions = preset_config.include_extensions
+            if not exclude_extensions:
+                filter_config.exclude_extensions = preset_config.exclude_extensions
+            if not include_patterns:
+                filter_config.include_patterns = preset_config.include_patterns
+            if not exclude_patterns:
+                filter_config.exclude_patterns = preset_config.exclude_patterns
+            if min_size_bytes is None and preset_config.min_size_bytes:
+                filter_config.min_size_bytes = preset_config.min_size_bytes
+            if max_size_bytes is None and preset_config.max_size_bytes:
+                filter_config.max_size_bytes = preset_config.max_size_bytes
+            if not exclude_binary:
+                filter_config.exclude_binary = preset_config.exclude_binary
+            if not exclude_large_files:
+                filter_config.exclude_large_files = preset_config.exclude_large_files
+            if not respect_gitignore:
+                filter_config.respect_gitignore = preset_config.respect_gitignore
+        except ValueError as e:
+            logger.error(str(e))
+            raise typer.Exit(1)
+
+    # Create file filter
+    file_filter = create_file_filter(filter_config)
+
+    # Log filter summary if verbose
+    if verbose:
+        filter_summary = file_filter.get_filter_summary()
+        logger.info("Active file filters:")
+        for key, value in filter_summary.items():
+            if value:
+                logger.info(f"  {key}: {value}")
+
+    # Validate URL is provided when not creating config
+    if not url:
+        logger.error("Repository URL is required")
+        raise typer.Exit(1)
 
     # Initialize components with custom retry configuration
     validator = InputValidator()
@@ -780,3 +933,49 @@ def download_file_with_verification(
     except Exception as e:
         logger.download_error(content.path, str(e))
         return False
+
+
+def _parse_size_string(size_str: str) -> Optional[int]:
+    """
+    Parse a human-readable size string into bytes.
+
+    Args:
+        size_str: Size string like "10MB", "1KB", "500B"
+
+    Returns:
+        Size in bytes, or None if parsing failed
+    """
+    size_str = size_str.strip().upper()
+
+    # Define size multipliers
+    multipliers = {
+        "B": 1,
+        "KB": 1024,
+        "MB": 1024 * 1024,
+        "GB": 1024 * 1024 * 1024,
+        "TB": 1024 * 1024 * 1024 * 1024,
+    }
+
+    # Try to extract number and unit
+    import re
+
+    match = re.match(r"^(\d*\.?\d+)\s*([KMGT]?B?)$", size_str)
+    if not match:
+        return None
+
+    number_str, unit = match.groups()
+
+    try:
+        number = float(number_str)
+    except ValueError:
+        return None
+
+    # Default to bytes if no unit specified
+    if not unit or unit == "":
+        unit = "B"
+
+    # Handle common abbreviations
+    if unit in multipliers:
+        return int(number * multipliers[unit])
+
+    return None

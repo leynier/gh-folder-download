@@ -106,6 +106,272 @@ gh-folder-download --url URL --quiet
 gh-folder-download --url URL --verbose
 ```
 
+## Configuration & File Filtering
+
+### 📋 Configuration System
+
+gh-folder-download supports flexible configuration through files, environment variables, and command-line options.
+
+#### Configuration File
+
+Create a configuration file to set default values and avoid repetitive command-line options:
+
+```bash
+# Generate a sample configuration file
+gh-folder-download --create-config
+
+# Use a specific config file
+gh-folder-download --config-file my-config.yaml --url REPO_URL
+```
+
+**Configuration File Locations** (in order of priority):
+
+1. Current directory: `./gh-folder-download.yaml`
+2. User config directory: `~/.config/gh-folder-download/gh-folder-download.yaml` (Linux/macOS)
+3. User home directory: `~/.gh-folder-download.yaml`
+
+**Sample Configuration:**
+
+```yaml
+# GitHub authentication
+github_token: "your_github_token_here"
+
+# Download settings
+download:
+  max_concurrent: 8
+  timeout: 60
+  max_retries: 5
+  verify_integrity: true
+
+# Cache settings
+cache:
+  enabled: true
+  max_size_gb: 10.0
+  max_age_days: 60
+
+# File filtering
+filters:
+  include_extensions: [".py", ".js", ".md"]
+  exclude_patterns: ["**/test/**", "**/*.pyc"]
+  exclude_binary: true
+  respect_gitignore: true
+
+# UI preferences
+ui:
+  show_progress: true
+  verbosity: "INFO"
+  use_colors: true
+```
+
+#### Environment Variables
+
+Override configuration with environment variables:
+
+```bash
+export GH_FOLDER_DOWNLOAD_GITHUB_TOKEN="your_token"
+export GH_FOLDER_DOWNLOAD_MAX_CONCURRENT=10
+export GH_FOLDER_DOWNLOAD_CACHE_ENABLED=true
+export GH_FOLDER_DOWNLOAD_SHOW_PROGRESS=false
+```
+
+### 🔍 Advanced File Filtering
+
+Filter files by extension, size, patterns, and content type for precise downloads.
+
+#### Extension Filters
+
+```bash
+# Download only Python and Markdown files
+gh-folder-download --url REPO_URL --include-extensions .py .md
+
+# Exclude log and temporary files
+gh-folder-download --url REPO_URL --exclude-extensions .log .tmp .cache
+
+# Combine with other filters
+gh-folder-download --url REPO_URL --include-extensions .js .ts --exclude-patterns "**/node_modules/**"
+```
+
+#### Size Filters
+
+```bash
+# Files between 1KB and 10MB
+gh-folder-download --url REPO_URL --min-size 1KB --max-size 10MB
+
+# Only small files (under 1MB)
+gh-folder-download --url REPO_URL --max-size 1MB
+
+# Exclude tiny files
+gh-folder-download --url REPO_URL --min-size 100B
+```
+
+**Supported Size Units:** B, KB, MB, GB, TB
+
+#### Pattern Filters
+
+Use glob patterns for sophisticated filtering:
+
+```bash
+# Include specific directories
+gh-folder-download --url REPO_URL --include-patterns "src/**" "docs/**"
+
+# Exclude test directories and compiled files
+gh-folder-download --url REPO_URL --exclude-patterns "**/test/**" "**/*.pyc" "**/*.o"
+
+# Complex pattern matching
+gh-folder-download --url REPO_URL \
+  --include-patterns "src/**/*.py" "config/*.yaml" \
+  --exclude-patterns "**/test_*" "**/__pycache__/**"
+```
+
+#### Content-Based Filters
+
+```bash
+# Exclude binary files (images, executables, etc.)
+gh-folder-download --url REPO_URL --exclude-binary
+
+# Exclude large files (>10MB)
+gh-folder-download --url REPO_URL --exclude-large-files
+
+# Respect common .gitignore patterns
+gh-folder-download --url REPO_URL --respect-gitignore
+```
+
+#### Filter Presets
+
+Use predefined filter combinations for common scenarios:
+
+```bash
+# Download only source code files
+gh-folder-download --url REPO_URL --filter-preset code-only
+
+# Download only documentation
+gh-folder-download --url REPO_URL --filter-preset docs-only
+
+# Download only configuration files
+gh-folder-download --url REPO_URL --filter-preset config-only
+
+# Exclude test files
+gh-folder-download --url REPO_URL --filter-preset no-tests
+
+# Download only small files
+gh-folder-download --url REPO_URL --filter-preset small-files
+
+# Minimal download (fastest)
+gh-folder-download --url REPO_URL --filter-preset minimal
+```
+
+**Available Presets:**
+
+| Preset | Description | Includes | Excludes |
+|--------|-------------|----------|----------|
+| `code-only` | Source code files | .py, .js, .ts, .java, .c, .cpp, .go, .rs, .php, .rb, etc. | Binary files, large files, gitignored files |
+| `docs-only` | Documentation files | .md, .rst, .txt, .html, docs/, README*, LICENSE* | Everything else |
+| `config-only` | Configuration files | .yaml, .json, .toml, .ini, .cfg, config/, .env | Everything else |
+| `no-tests` | Exclude test files | All files | test/, tests/, *_test.*, *Test.* |
+| `small-files` | Small files only | Files < 1MB | Binary files, large files |
+| `minimal` | Essential files | .md, .txt, .py, .js, .html, .css | Binary, large files, gitignored |
+
+#### Complex Filtering Examples
+
+**Code Review Preparation:**
+
+```bash
+gh-folder-download --url REPO_URL \
+  --include-extensions .py .js .ts .html .css .md \
+  --exclude-patterns "**/test/**" "**/*.min.js" \
+  --exclude-binary \
+  --max-size 500KB \
+  --respect-gitignore
+```
+
+**Documentation Extraction:**
+
+```bash
+gh-folder-download --url REPO_URL \
+  --filter-preset docs-only \
+  --include-patterns "README*" "CHANGELOG*" "LICENSE*" \
+  --max-size 10MB
+```
+
+**Configuration Backup:**
+
+```bash
+gh-folder-download --url REPO_URL \
+  --filter-preset config-only \
+  --include-patterns ".github/**" "docker-compose.*" \
+  --max-size 1MB
+```
+
+**Quick Source Code Scan:**
+
+```bash
+gh-folder-download --url REPO_URL \
+  --filter-preset minimal \
+  --exclude-patterns "**/vendor/**" "**/node_modules/**" \
+  --max-size 100KB
+```
+
+#### Combining Filters
+
+Filters work together logically:
+
+1. **Include Extensions** → File must match at least one extension
+2. **Exclude Extensions** → File must not match any extension
+3. **Include Patterns** → File must match at least one pattern
+4. **Exclude Patterns** → File must not match any pattern
+5. **Size Filters** → File size must be within range
+6. **Binary Filter** → File must not be binary (if enabled)
+7. **Large File Filter** → File must not be >10MB (if enabled)
+8. **Gitignore Filter** → File must not match gitignore patterns (if enabled)
+
+All filters must pass for a file to be included.
+
+### 🎯 Practical Use Cases
+
+#### Development Workflow
+
+```bash
+# Daily code sync
+gh-folder-download --url REPO_URL \
+  --filter-preset code-only \
+  --use-cache \
+  --show-progress
+
+# Quick documentation update
+gh-folder-download --url REPO_URL/tree/main/docs \
+  --filter-preset docs-only \
+  --output ./docs
+```
+
+#### DevOps & Configuration
+
+```bash
+# Infrastructure config backup
+gh-folder-download --url REPO_URL \
+  --include-patterns "*.yml" "*.yaml" "Dockerfile*" "*.env" \
+  --output ./configs
+
+# CI/CD pipeline files
+gh-folder-download --url REPO_URL \
+  --include-patterns ".github/**" ".gitlab-ci.yml" "Jenkinsfile" \
+  --output ./pipelines
+```
+
+#### Research & Analysis
+
+```bash
+# Code analysis (no tests, no binaries)
+gh-folder-download --url REPO_URL \
+  --filter-preset code-only \
+  --exclude-patterns "**/test/**" "**/tests/**" \
+  --max-size 1MB
+
+# License and legal review
+gh-folder-download --url REPO_URL \
+  --include-patterns "LICENSE*" "COPYING*" "NOTICE*" "LEGAL*" \
+  --include-extensions .txt .md
+```
+
 ## Performance & Scalability Features
 
 ### 🚀 Parallel Downloads
@@ -257,6 +523,34 @@ Options:
   --show-progress / --no-show-progress
                                   Show advanced progress bars and real-time
                                   statistics [default: show-progress]
+  
+  # Configuration Options
+  --config-file PATH              Path to configuration file
+  --create-config                 Create a sample configuration file and exit
+  
+  # File Filtering Options
+  --include-extensions TEXT       Include only files with these extensions 
+                                  (e.g., --include-extensions .py .js)
+  --exclude-extensions TEXT       Exclude files with these extensions 
+                                  (e.g., --exclude-extensions .log .tmp)
+  --include-patterns TEXT         Include files matching these glob patterns 
+                                  (e.g., --include-patterns 'src/**' 'docs/**')
+  --exclude-patterns TEXT         Exclude files matching these glob patterns 
+                                  (e.g., --exclude-patterns '**/test/**' '**/*.pyc')
+  --min-size TEXT                 Minimum file size (e.g., --min-size 1KB, 1MB)
+  --max-size TEXT                 Maximum file size (e.g., --max-size 10MB, 100KB)
+  --exclude-binary / --no-exclude-binary
+                                  Exclude binary files [default: no-exclude-binary]
+  --exclude-large-files / --no-exclude-large-files
+                                  Exclude files larger than 10MB
+                                  [default: no-exclude-large-files]
+  --respect-gitignore / --no-respect-gitignore
+                                  Respect common .gitignore patterns
+                                  [default: no-respect-gitignore]
+  --filter-preset TEXT            Use a predefined filter preset (code-only, 
+                                  docs-only, config-only, no-tests, small-files, 
+                                  minimal)
+                                  
   --help                          Show this message and exit.
 ```
 

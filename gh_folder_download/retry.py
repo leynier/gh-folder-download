@@ -4,7 +4,7 @@ Retry mechanism with exponential backoff for gh-folder-download.
 
 import time
 from functools import wraps
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 
 from github import GithubException
 
@@ -106,7 +106,10 @@ class RetryHandler:
                 delay = self._calculate_delay(attempt, retry_config)
 
                 # Special handling for GitHub rate limiting
-                if isinstance(e, GithubException) and e.status == 403:
+                if (
+                    isinstance(e, GithubException)
+                    and cast(GithubException, e).status == 403
+                ):
                     # Check if it's rate limiting
                     if "rate limit" in str(e).lower():
                         # Use longer delay for rate limiting
@@ -136,7 +139,9 @@ class RetryHandler:
 
         # Check for GitHub API exceptions
         if isinstance(exception, GithubException):
-            return exception.status in self.RETRYABLE_GITHUB_STATUS
+            return (
+                cast(GithubException, exception).status in self.RETRYABLE_GITHUB_STATUS
+            )
 
         # Check for specific error messages that indicate temporary issues
         error_msg = str(exception).lower()
