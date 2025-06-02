@@ -14,6 +14,7 @@ import aiohttp
 from .cache import DownloadCache
 from .integrity import FileIntegrityChecker, IntegrityError
 from .logger import get_logger
+from .progress import ProgressTracker, SimpleProgressTracker
 
 
 @dataclass
@@ -52,6 +53,8 @@ class ParallelDownloader:
         timeout: int = 30,
         verify_integrity: bool = True,
         use_cache: bool = True,
+        show_progress: bool = True,
+        quiet: bool = False,
     ):
         """
         Initialize parallel downloader.
@@ -62,18 +65,28 @@ class ParallelDownloader:
             timeout: Timeout for individual downloads in seconds
             verify_integrity: Whether to verify file integrity
             use_cache: Whether to use caching
+            show_progress: Whether to show progress bars
+            quiet: Whether to suppress progress display
         """
         self.max_concurrent_downloads = max_concurrent_downloads
         self.chunk_size = chunk_size
         self.timeout = timeout
         self.verify_integrity = verify_integrity
         self.use_cache = use_cache
+        self.show_progress = show_progress
+        self.quiet = quiet
 
         self.logger = get_logger()
 
         # Initialize cache and integrity checker
         self.cache = DownloadCache() if use_cache else None
         self.integrity_checker = FileIntegrityChecker() if verify_integrity else None
+
+        # Initialize progress tracker
+        if show_progress and not quiet:
+            self.progress_tracker = ProgressTracker(quiet=quiet)
+        else:
+            self.progress_tracker = SimpleProgressTracker()
 
         # Statistics
         self.stats = {
@@ -100,6 +113,12 @@ class ParallelDownloader:
         """
         if not download_tasks:
             return []
+
+        # Calculate total size
+        total_bytes = sum(task.expected_size or 0 for task in download_tasks)
+
+        # Start progress tracking
+        self.progress_tracker.start_session(len(download_tasks), total_bytes)
 
         self.logger.info(f"Starting parallel download of {len(download_tasks)} files")
         self.logger.info(f"Max concurrent downloads: {self.max_concurrent_downloads}")
@@ -133,6 +152,10 @@ class ParallelDownloader:
                         error=str(result),
                     )
                     processed_results.append(error_result)
+                    # Update progress for failed download
+                    self.progress_tracker.complete_file(
+                        download_tasks[i].file_path, success=False
+                    )
                 else:
                     processed_results.append(result)
 
@@ -140,9 +163,11 @@ class ParallelDownloader:
         total_time = time.time() - start_time
         self._update_stats(processed_results, total_time)
 
-        # Finalize cache if used
+        # Finalize cache and progress
         if self.cache:
             self.cache.finalize()
+
+        self.progress_tracker.finish_session()
 
         self.logger.info(
             f"Parallel download completed in {total_time:.2f}s. "
@@ -159,126 +184,120 @@ class ParallelDownloader:
         semaphore: asyncio.Semaphore,
         task: DownloadTask,
     ) -> DownloadResult:
-        """
-        Download a single file with caching and integrity verification.
+        """Download a single file with progress tracking."""
+        start_time = time.time()
 
-        Args:
-            session: aiohttp session
-            semaphore: Semaphore for concurrency control
-            task: Download task
+        # Add progress task for this file
+        self.progress_tracker.add_file_task(task.file_path, task.expected_size or 0)
 
-        Returns:
-            Download result
-        """
         async with semaphore:
-            start_time = time.time()
-
             # Check cache first
             if self.cache and self._check_cache(task):
-                self.logger.debug(f"File found in cache: {task.file_path}")
+                self.logger.debug(f"📁 Cache hit: {task.file_path}")
+
+                # Update progress for cached file
+                self.progress_tracker.complete_file(
+                    task.file_path, success=True, from_cache=True
+                )
+
                 return DownloadResult(
                     task=task,
                     success=True,
-                    duration=time.time() - start_time,
                     bytes_downloaded=task.expected_size or 0,
+                    duration=time.time() - start_time,
                     from_cache=True,
                     integrity_verified=True,  # Assume cached files are verified
                 )
 
-            # Ensure parent directory exists
-            task.local_path.parent.mkdir(parents=True, exist_ok=True)
-
             try:
-                # Download the file
-                self.logger.debug(f"Downloading: {task.file_path}")
-                bytes_downloaded = await self._stream_download(session, task)
+                # Ensure parent directory exists
+                task.local_path.parent.mkdir(parents=True, exist_ok=True)
+
+                # Download the file with progress tracking
+                async with session.get(task.download_url) as response:
+                    if response.status != 200:
+                        error_msg = f"HTTP {response.status}: {response.reason}"
+                        self.logger.error(
+                            f"❌ Download failed for {task.file_path}: {error_msg}"
+                        )
+
+                        # Update progress for failed file
+                        self.progress_tracker.complete_file(
+                            task.file_path, success=False
+                        )
+
+                        return DownloadResult(
+                            task=task,
+                            success=False,
+                            error=error_msg,
+                            duration=time.time() - start_time,
+                        )
+
+                    # Stream download with progress updates
+                    total_downloaded = 0
+                    with open(task.local_path, "wb") as file:
+                        async for chunk in response.content.iter_chunked(
+                            self.chunk_size
+                        ):
+                            file.write(chunk)
+                            total_downloaded += len(chunk)
+
+                            # Update progress
+                            self.progress_tracker.update_file_progress(
+                                task.file_path, total_downloaded
+                            )
 
                 # Verify integrity if enabled
-                integrity_verified = False
-                if self.integrity_checker:
+                integrity_verified = True
+                if self.verify_integrity and self.integrity_checker:
                     integrity_verified = await self._verify_file_integrity(task)
 
-                # Add to cache if successful
+                # Update cache if enabled
                 if self.cache and integrity_verified:
                     await self._add_to_cache(task)
 
-                duration = time.time() - start_time
-
                 self.logger.debug(
-                    f"Successfully downloaded {task.file_path} "
-                    f"({bytes_downloaded} bytes in {duration:.2f}s)"
+                    f"✅ Downloaded: {task.file_path} ({total_downloaded} bytes)"
                 )
+
+                # Update progress for completed file
+                self.progress_tracker.complete_file(task.file_path, success=True)
 
                 return DownloadResult(
                     task=task,
                     success=True,
-                    duration=duration,
-                    bytes_downloaded=bytes_downloaded,
-                    from_cache=False,
+                    bytes_downloaded=total_downloaded,
+                    duration=time.time() - start_time,
                     integrity_verified=integrity_verified,
                 )
 
-            except Exception as e:
-                duration = time.time() - start_time
-                self.logger.error(f"Failed to download {task.file_path}: {e}")
+            except asyncio.TimeoutError:
+                error_msg = f"Download timeout after {self.timeout}s"
+                self.logger.error(f"⏰ {error_msg}: {task.file_path}")
+
+                # Update progress for failed file
+                self.progress_tracker.complete_file(task.file_path, success=False)
 
                 return DownloadResult(
                     task=task,
                     success=False,
-                    error=str(e),
-                    duration=duration,
+                    error=error_msg,
+                    duration=time.time() - start_time,
                 )
 
-    async def _stream_download(
-        self,
-        session: aiohttp.ClientSession,
-        task: DownloadTask,
-    ) -> int:
-        """
-        Stream download a file from URL.
+            except Exception as e:
+                error_msg = f"Unexpected error: {str(e)}"
+                self.logger.error(f"💥 {error_msg}: {task.file_path}")
 
-        Args:
-            session: aiohttp session
-            task: Download task
+                # Update progress for failed file
+                self.progress_tracker.complete_file(task.file_path, success=False)
 
-        Returns:
-            Number of bytes downloaded
-        """
-        async with session.get(task.download_url) as response:
-            response.raise_for_status()
-
-            # Note: Content-Length verification is informational only
-            # Some files may have slight differences due to encoding
-            content_length = response.headers.get("Content-Length")
-            if content_length and task.expected_size:
-                expected = task.expected_size
-                actual = int(content_length)
-                if abs(actual - expected) > 0:
-                    self.logger.debug(
-                        f"Content-Length differs for {task.file_path}: "
-                        f"expected {expected}, server reports {actual}"
-                    )
-
-            bytes_downloaded = 0
-
-            # Stream the content to file
-            with open(task.local_path, "wb") as f:
-                async for chunk in response.content.iter_chunked(self.chunk_size):
-                    f.write(chunk)
-                    bytes_downloaded += len(chunk)
-
-            # Verify downloaded size (allow some flexibility)
-            if task.expected_size and bytes_downloaded > 0:
-                expected = task.expected_size
-                # Allow up to 10% difference for encoding variations
-                tolerance = max(1, int(expected * 0.1))
-                if abs(bytes_downloaded - expected) > tolerance:
-                    self.logger.warning(
-                        f"Downloaded size significantly differs for {task.file_path}: "
-                        f"expected ~{expected}, got {bytes_downloaded}"
-                    )
-
-            return bytes_downloaded
+                return DownloadResult(
+                    task=task,
+                    success=False,
+                    error=error_msg,
+                    duration=time.time() - start_time,
+                )
 
     def _check_cache(self, task: DownloadTask) -> bool:
         """Check if file is available in cache."""

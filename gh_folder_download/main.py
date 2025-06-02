@@ -84,6 +84,10 @@ def download_command(
         False,
         help="Disable rate limiting completely for maximum speed (may exhaust API limits)",
     ),
+    show_progress: bool = Option(
+        True,
+        help="Show advanced progress bars and real-time statistics",
+    ),
 ) -> None:
     # Setup logging
     if quiet:
@@ -221,6 +225,8 @@ def download_command(
                     use_cache=use_cache,
                     github=github,
                     api_retry_handler=api_retry_handler,
+                    quiet=quiet,
+                    show_progress=show_progress,
                 )
             else:
                 # Use rate-limited client (we know github_client is not None here)
@@ -236,6 +242,8 @@ def download_command(
                     use_cache=use_cache,
                     github_client=github_client,
                     api_retry_handler=api_retry_handler,
+                    quiet=quiet,
+                    show_progress=show_progress,
                 )
         else:
             # Use sequential downloader (legacy)
@@ -340,6 +348,8 @@ def download_folder_parallel(
     use_cache: bool,
     github_client: RateLimitedGitHubClient,
     api_retry_handler: APIRetryHandler,
+    quiet: bool,
+    show_progress: bool,
 ) -> dict[str, int]:
     """
     Download all contents using parallel downloader.
@@ -434,6 +444,8 @@ def download_folder_parallel(
         max_concurrent_downloads=max_concurrent,
         verify_integrity=verify_integrity,
         use_cache=use_cache,
+        show_progress=show_progress,
+        quiet=quiet,
     )
 
     results = asyncio.run(downloader.download_files(download_tasks))
@@ -473,6 +485,8 @@ def download_folder_parallel_no_rate_limit(
     use_cache: bool,
     github: Github,
     api_retry_handler: APIRetryHandler,
+    quiet: bool,
+    show_progress: bool,
 ) -> dict[str, int]:
     """
     Download all contents using parallel downloader without rate limiting.
@@ -565,6 +579,8 @@ def download_folder_parallel_no_rate_limit(
         max_concurrent_downloads=max_concurrent,
         verify_integrity=verify_integrity,
         use_cache=use_cache,
+        show_progress=show_progress,
+        quiet=quiet,
     )
 
     results = asyncio.run(downloader.download_files(download_tasks))

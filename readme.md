@@ -14,7 +14,7 @@ A robust, high-performance command line application (CLI) to download specific f
 ## Features
 
 ✨ **Smart Logging**: Rich, colorful output with structured logging  
-📊 **Progress Tracking**: Real-time download progress with file sizes  
+📊 **Advanced Progress Bars**: Real-time progress tracking with individual file progress, ETA, and speed  
 📁 **Flexible Downloads**: Download entire repos, specific branches, or folders  
 🔧 **Configurable**: Multiple verbosity levels and log file support  
 ⚡ **Fast & Reliable**: Built with modern Python and robust error handling  
@@ -24,6 +24,87 @@ A robust, high-performance command line application (CLI) to download specific f
 🚀 **Parallel Downloads**: Concurrent downloads for maximum speed  
 💾 **Intelligent Caching**: Avoid re-downloading unchanged files  
 🏗️ **Rate Limiting**: Smart GitHub API usage with automatic throttling  
+
+## User Experience Features
+
+### 📊 Advanced Progress Bars
+
+Rich, real-time progress tracking with detailed statistics:
+
+- **Individual file progress**: Each file shows its own progress bar with filename, percentage, size, and speed
+- **Overall progress**: Master progress bar showing total completion across all files
+- **Real-time statistics**: Live updates of download speed, estimated time remaining (ETA), and completion percentage
+- **Visual feedback**: Colorful spinners, bars, and status indicators
+- **Smart file naming**: Truncated filenames for clean display
+
+```bash
+╭──────────────────────────────────────── 📊 Download Information ─────────────────────────────────────────╮
+│      Download Session                                                                                    │
+│ ┏━━━━━━━━━━━━━┳━━━━━━━━━━┓                                                                               │
+│ ┃ Metric      ┃    Value ┃                                                                               │
+│ ┡━━━━━━━━━━━━━╇━━━━━━━━━━┩                                                                               │
+│ │ Total Files │       25 │                                                                               │
+│ │ Total Size  │  15.2 MB │                                                                               │
+│ │ Started     │ 14:23:15 │                                                                               │
+│ └─────────────┴──────────┘                                                                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+⠸ Overall Progress (25 files) ━━━━━━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━ 65.4% • 9.9/15.2 MB • 2.1 MB/s • 0:00:03
+⠋ main.py                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 89.2% • 45.6/51.2 kB • 1.8 MB/s • 0:00:01
+⠙ utils.py                   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100.0% • 32.1/32.1 kB • 2.3 MB/s • 0:00:00
+⠹ config.yaml               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100.0% • 2.4/2.4 kB • 1.2 MB/s • 0:00:00
+```
+
+### 🎯 Performance Metrics
+
+Comprehensive performance tracking and statistics:
+
+- **Download speed**: Real-time speed in B/s, KB/s, MB/s or GB/s
+- **ETA calculation**: Smart time estimation based on current speed and remaining data
+- **Cache efficiency**: Track and display cache hit rates
+- **Success rates**: Monitor and report download success/failure rates
+- **Completion tracking**: Files completed vs total with percentage
+
+### 📈 Final Summary
+
+Detailed completion report with performance metrics:
+
+```bash
+╭────────────────────────────────────────── ✅ Download Complete ──────────────────────────────────────────╮
+│ ┏━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┓                                                                  │
+│ ┃ Metric                  ┃     Value ┃                                                                  │
+│ ┡━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━┩                                                                  │
+│ │ Total Files             │        25 │                                                                  │
+│ │ Successfully Downloaded │        24 │                                                                  │
+│ │ From Cache              │         8 │                                                                  │
+│ │ Failed                  │         1 │                                                                  │
+│ │                         │           │                                                                  │
+│ │ Total Downloaded        │   15.2 MB │                                                                  │
+│ │ Total Time              │      7.3s │                                                                  │
+│ │ Average Speed           │  2.1 MB/s │                                                                  │
+│ │ Success Rate            │     96.0% │                                                                  │
+│ │ Cache Hit Rate          │     33.3% │                                                                  │
+│ └─────────────────────────┴───────────┘                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+```
+
+### 🎮 Progress Control Options
+
+Control the progress display experience:
+
+```bash
+# Full progress experience (default)
+gh-folder-download --url URL --show-progress
+
+# Disable progress bars for clean output
+gh-folder-download --url URL --no-show-progress
+
+# Quiet mode - minimal output
+gh-folder-download --url URL --quiet
+
+# Verbose mode with detailed progress
+gh-folder-download --url URL --verbose
+```
 
 ## Performance & Scalability Features
 
@@ -173,6 +254,9 @@ Options:
                                   Disable rate limiting completely for maximum
                                   speed (may exhaust API limits)
                                   [default: no-disable-rate-limiting]
+  --show-progress / --no-show-progress
+                                  Show advanced progress bars and real-time
+                                  statistics [default: show-progress]
   --help                          Show this message and exit.
 ```
 
