@@ -1,3 +1,4 @@
+import asyncio
 import os
 import urllib.request
 from os import makedirs
@@ -12,8 +13,11 @@ from github.ContentFile import ContentFile
 from github.Repository import Repository
 from typer import Option, Typer
 
+from .cache import DownloadCache
 from .integrity import FileIntegrityChecker, IntegrityError
 from .logger import get_logger, setup_logger
+from .parallel_downloader import DownloadTask, ParallelDownloader
+from .rate_limiter import RateLimitedGitHubClient
 from .retry import APIRetryHandler, DownloadRetryHandler, RetryConfig, RetryError
 from .validation import InputValidator, ValidationError
 
@@ -46,6 +50,39 @@ def download_command(
         help="Base delay between retries in seconds",
         min=0.1,
         max=30.0,
+    ),
+    # New performance options
+    parallel_downloads: bool = Option(
+        True,
+        help="Enable parallel downloads for better performance",
+    ),
+    max_concurrent: int = Option(
+        5,
+        help="Maximum number of concurrent downloads",
+        min=1,
+        max=20,
+    ),
+    use_cache: bool = Option(
+        True,
+        help="Enable intelligent caching to avoid re-downloading unchanged files",
+    ),
+    clear_cache: bool = Option(
+        False,
+        help="Clear download cache before starting",
+    ),
+    cache_stats: bool = Option(
+        False,
+        help="Show cache statistics",
+    ),
+    rate_limit_buffer: int = Option(
+        100,
+        help="Number of GitHub API requests to keep as buffer",
+        min=10,
+        max=1000,
+    ),
+    disable_rate_limiting: bool = Option(
+        False,
+        help="Disable rate limiting completely for maximum speed (may exhaust API limits)",
     ),
 ) -> None:
     # Setup logging
@@ -80,6 +117,25 @@ def download_command(
     download_retry_handler = DownloadRetryHandler(download_retry_config)
     integrity_checker = FileIntegrityChecker()
 
+    # Initialize cache
+    cache = DownloadCache() if use_cache else None
+    if clear_cache and cache:
+        cache.clear_cache()
+        logger.info("Cache cleared")
+
+    # Show cache stats if requested
+    if cache_stats and cache:
+        stats = cache.get_cache_stats()
+        if stats["total_entries"] > 0:
+            logger.info(
+                f"Cache stats: {stats['total_entries']} entries, "
+                f"{stats['total_size_mb']} MB, "
+                f"oldest: {stats['oldest_entry']}, "
+                f"newest: {stats['newest_entry']}"
+            )
+        else:
+            logger.info("Cache is empty")
+
     try:
         # Enhanced input validation
         logger.progress_info("Validating inputs...")
@@ -108,17 +164,27 @@ def download_command(
 
         logger.debug("✅ All inputs validated successfully")
 
-        # Setup GitHub client with retry
+        # Setup GitHub client with or without rate limiting
         logger.progress_info("Connecting to GitHub API...")
-        github = Github(token)
 
-        # Get repository with retry
-        def get_repository():
-            return github.get_repo(f"{org}/{repo}")
+        if disable_rate_limiting:
+            logger.warning("Rate limiting disabled - API limits may be exhausted")
+            github = Github(token)
+            github_client = None  # Signal that we're using direct client
 
-        repository = api_retry_handler.retry_api_call(
-            get_repository, f"get repository {org}/{repo}"
-        )
+            # Get repository directly
+            repository = github.get_repo(f"{org}/{repo}")
+
+        else:
+            github_client = RateLimitedGitHubClient(token, rate_limit_buffer)
+
+            # Log rate limit status
+            if verbose:
+                github_client.log_rate_limit_status()
+
+            # Get repository with rate limiting
+            repository = github_client.get_repo(f"{org}/{repo}")
+            github = github_client.github  # For compatibility
 
         if not branch:
             branch = repository.default_branch
@@ -139,17 +205,52 @@ def download_command(
 
         # Start download
         start_time = time()
-        stats = download_folder(
-            repository=repository,
-            sha=sha,
-            path=path,
-            output=output,
-            force=force,
-            verify_integrity=verify_integrity,
-            api_retry_handler=api_retry_handler,
-            download_retry_handler=download_retry_handler,
-            integrity_checker=integrity_checker,
-        )
+
+        if parallel_downloads:
+            # Use parallel downloader
+            if disable_rate_limiting:
+                # Use direct GitHub client without rate limiting
+                stats = download_folder_parallel_no_rate_limit(
+                    repository=repository,
+                    sha=sha,
+                    path=path,
+                    output=output,
+                    force=force,
+                    max_concurrent=max_concurrent,
+                    verify_integrity=verify_integrity,
+                    use_cache=use_cache,
+                    github=github,
+                    api_retry_handler=api_retry_handler,
+                )
+            else:
+                # Use rate-limited client (we know github_client is not None here)
+                assert github_client is not None
+                stats = download_folder_parallel(
+                    repository=repository,
+                    sha=sha,
+                    path=path,
+                    output=output,
+                    force=force,
+                    max_concurrent=max_concurrent,
+                    verify_integrity=verify_integrity,
+                    use_cache=use_cache,
+                    github_client=github_client,
+                    api_retry_handler=api_retry_handler,
+                )
+        else:
+            # Use sequential downloader (legacy)
+            stats = download_folder(
+                repository=repository,
+                sha=sha,
+                path=path,
+                output=output,
+                force=force,
+                verify_integrity=verify_integrity,
+                api_retry_handler=api_retry_handler,
+                download_retry_handler=download_retry_handler,
+                integrity_checker=integrity_checker,
+            )
+
         end_time = time()
 
         # Show summary
@@ -167,8 +268,25 @@ def download_command(
                 )
             elif verify_integrity:
                 logger.success("All files passed integrity verification")
+
+            # Show cache stats for parallel downloads
+            if parallel_downloads and stats.get("cached_files", 0) > 0:
+                logger.info(f"Cache hits: {stats['cached_files']} files")
+
+            # Show performance stats
+            if parallel_downloads and "average_speed_mbps" in stats:
+                logger.info(f"Average speed: {stats['average_speed_mbps']:.2f} MB/s")
+
         else:
             logger.warning("No files were downloaded")
+
+        # Final rate limit status
+        if verbose:
+            logger.progress_info("Final rate limit status:")
+            if github_client:
+                github_client.log_rate_limit_status()
+            else:
+                logger.info("Rate limiting was disabled for this session")
 
     except ValidationError as e:
         logger.error(f"Validation error: {e}")
@@ -211,6 +329,270 @@ def get_sha_for_branch_or_tag(repository: Repository, branch_or_tag: str) -> str
     )
 
 
+def download_folder_parallel(
+    repository: Repository,
+    sha: str,
+    path: str,
+    output: Path,
+    force: bool,
+    max_concurrent: int,
+    verify_integrity: bool,
+    use_cache: bool,
+    github_client: RateLimitedGitHubClient,
+    api_retry_handler: APIRetryHandler,
+) -> dict[str, int]:
+    """
+    Download all contents using parallel downloader.
+
+    Returns download statistics.
+    """
+    logger = get_logger()
+
+    fullpath = join(output, path)
+
+    if exists(fullpath):
+        if force:
+            logger.warning(f"Removing existing folder: {fullpath}")
+            rmtree(fullpath)
+        else:
+            logger.error(f"Output folder already exists: {fullpath}")
+            logger.info("Use --force to overwrite existing folders")
+            return {"total_files": 0, "total_size": 0}
+
+    logger.progress_info(f"Creating directory: {fullpath}")
+    makedirs(fullpath, exist_ok=True)
+
+    # Collect all download tasks
+    download_tasks = []
+    repo_full_name = repository.full_name
+
+    def collect_tasks(current_path: str, current_output: Path):
+        """Recursively collect all download tasks."""
+
+        # Get directory contents with rate limiting and retry
+        def get_contents():
+            github_client.rate_limiter.wait_if_needed()
+            return repository.get_dir_contents(current_path, ref=sha)
+
+        try:
+            contents = api_retry_handler.retry_api_call(
+                get_contents, f"get directory contents for {current_path}"
+            )
+        except RetryError as e:
+            logger.error(f"Failed to get directory contents for '{current_path}': {e}")
+            return
+
+        for content in contents:
+            content_output_path = current_output / content.name
+
+            if content.type == "dir":
+                logger.debug(f"Found directory: {content.path}")
+                content_output_path.mkdir(parents=True, exist_ok=True)
+                # Recursively collect from subdirectory
+                collect_tasks(content.path, content_output_path)
+            else:
+                # Get file content to get download URL
+                try:
+
+                    def get_file_content():
+                        github_client.rate_limiter.wait_if_needed()
+                        return repository.get_contents(content.path, ref=sha)
+
+                    file_content = api_retry_handler.retry_api_call(
+                        get_file_content, f"get file content for {content.path}"
+                    )
+
+                    if (
+                        isinstance(file_content, ContentFile)
+                        and file_content.download_url
+                    ):
+                        task = DownloadTask(
+                            file_path=content.path,
+                            download_url=file_content.download_url,
+                            local_path=content_output_path,
+                            expected_size=content.size,
+                            sha=file_content.sha,
+                            repo_full_name=repo_full_name,
+                            ref=sha,
+                        )
+                        download_tasks.append(task)
+                    else:
+                        logger.warning(f"No download URL for {content.path}")
+
+                except Exception as e:
+                    logger.error(f"Failed to get file content for {content.path}: {e}")
+
+    # Collect all tasks
+    collect_tasks(path, Path(fullpath))
+
+    if not download_tasks:
+        logger.warning("No files found to download")
+        return {"total_files": 0, "total_size": 0}
+
+    # Execute parallel downloads
+    downloader = ParallelDownloader(
+        max_concurrent_downloads=max_concurrent,
+        verify_integrity=verify_integrity,
+        use_cache=use_cache,
+    )
+
+    results = asyncio.run(downloader.download_files(download_tasks))
+
+    # Process results and calculate stats
+    stats = {
+        "total_files": len([r for r in results if r.success]),
+        "total_size": sum(r.bytes_downloaded for r in results if r.success),
+        "integrity_failures": len(
+            [r for r in results if r.success and not r.integrity_verified]
+        ),
+        "download_failures": len([r for r in results if not r.success]),
+        "cached_files": len([r for r in results if r.from_cache]),
+    }
+
+    # Add performance stats
+    downloader_stats = downloader.get_stats()
+    stats.update(
+        {
+            "average_speed_mbps": downloader_stats.get("average_speed_mbps", 0),
+            "success_rate": downloader_stats.get("success_rate", 0),
+            "cache_hit_rate": downloader_stats.get("cache_hit_rate", 0),
+        }
+    )
+
+    return stats
+
+
+def download_folder_parallel_no_rate_limit(
+    repository: Repository,
+    sha: str,
+    path: str,
+    output: Path,
+    force: bool,
+    max_concurrent: int,
+    verify_integrity: bool,
+    use_cache: bool,
+    github: Github,
+    api_retry_handler: APIRetryHandler,
+) -> dict[str, int]:
+    """
+    Download all contents using parallel downloader without rate limiting.
+
+    Returns download statistics.
+    """
+    logger = get_logger()
+
+    fullpath = join(output, path)
+
+    if exists(fullpath):
+        if force:
+            logger.warning(f"Removing existing folder: {fullpath}")
+            rmtree(fullpath)
+        else:
+            logger.error(f"Output folder already exists: {fullpath}")
+            logger.info("Use --force to overwrite existing folders")
+            return {"total_files": 0, "total_size": 0}
+
+    logger.progress_info(f"Creating directory: {fullpath}")
+    makedirs(fullpath, exist_ok=True)
+
+    # Collect all download tasks
+    download_tasks = []
+    repo_full_name = repository.full_name
+
+    def collect_tasks(current_path: str, current_output: Path):
+        """Recursively collect all download tasks."""
+
+        # Get directory contents without rate limiting
+        def get_contents():
+            return repository.get_dir_contents(current_path, ref=sha)
+
+        try:
+            contents = api_retry_handler.retry_api_call(
+                get_contents, f"get directory contents for {current_path}"
+            )
+        except RetryError as e:
+            logger.error(f"Failed to get directory contents for '{current_path}': {e}")
+            return
+
+        for content in contents:
+            content_output_path = current_output / content.name
+
+            if content.type == "dir":
+                logger.debug(f"Found directory: {content.path}")
+                content_output_path.mkdir(parents=True, exist_ok=True)
+                # Recursively collect from subdirectory
+                collect_tasks(content.path, content_output_path)
+            else:
+                # Get file content to get download URL
+                try:
+
+                    def get_file_content():
+                        return repository.get_contents(content.path, ref=sha)
+
+                    file_content = api_retry_handler.retry_api_call(
+                        get_file_content, f"get file content for {content.path}"
+                    )
+
+                    if (
+                        isinstance(file_content, ContentFile)
+                        and file_content.download_url
+                    ):
+                        task = DownloadTask(
+                            file_path=content.path,
+                            download_url=file_content.download_url,
+                            local_path=content_output_path,
+                            expected_size=content.size,
+                            sha=file_content.sha,
+                            repo_full_name=repo_full_name,
+                            ref=sha,
+                        )
+                        download_tasks.append(task)
+                    else:
+                        logger.warning(f"No download URL for {content.path}")
+
+                except Exception as e:
+                    logger.error(f"Failed to get file content for {content.path}: {e}")
+
+    # Collect all tasks
+    collect_tasks(path, Path(fullpath))
+
+    if not download_tasks:
+        logger.warning("No files found to download")
+        return {"total_files": 0, "total_size": 0}
+
+    # Execute parallel downloads
+    downloader = ParallelDownloader(
+        max_concurrent_downloads=max_concurrent,
+        verify_integrity=verify_integrity,
+        use_cache=use_cache,
+    )
+
+    results = asyncio.run(downloader.download_files(download_tasks))
+
+    # Process results and calculate stats
+    stats = {
+        "total_files": len([r for r in results if r.success]),
+        "total_size": sum(r.bytes_downloaded for r in results if r.success),
+        "integrity_failures": len(
+            [r for r in results if r.success and not r.integrity_verified]
+        ),
+        "download_failures": len([r for r in results if not r.success]),
+        "cached_files": len([r for r in results if r.from_cache]),
+    }
+
+    # Add performance stats
+    downloader_stats = downloader.get_stats()
+    stats.update(
+        {
+            "average_speed_mbps": downloader_stats.get("average_speed_mbps", 0),
+            "success_rate": downloader_stats.get("success_rate", 0),
+            "cache_hit_rate": downloader_stats.get("cache_hit_rate", 0),
+        }
+    )
+
+    return stats
+
+
 def download_folder(
     repository: Repository,
     sha: str,
@@ -224,7 +606,7 @@ def download_folder(
 ) -> dict[str, int]:
     """
     Download all contents at server_path with commit tag sha in
-    the repository.
+    the repository. (Legacy sequential version)
 
     Returns download statistics.
     """
@@ -319,6 +701,7 @@ def download_file_with_verification(
 ) -> bool:
     """
     Download a single file with retry and integrity verification.
+    (Legacy sequential version)
 
     Returns True if download and verification succeeded, False otherwise.
     """

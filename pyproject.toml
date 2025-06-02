@@ -19,7 +19,7 @@ keywords = ["github", "download", "folder", "cli"]
 
 requires-python = ">=3.12"
 
-dependencies = ["PyGithub>=1.55", "typer>=0.6.1", "wget>=3.2"]
+dependencies = ["PyGithub>=1.55", "typer>=0.6.1", "wget>=3.2", "aiohttp>=3.8.0"]
 
 [tool.uv]
 dev-dependencies = ["ruff>=0.11.12"]
