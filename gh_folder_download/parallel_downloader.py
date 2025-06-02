@@ -285,7 +285,7 @@ class ParallelDownloader:
                     duration=time.time() - start_time,
                 )
 
-            except Exception as e:
+            except (aiohttp.ClientError, OSError, IOError) as e:
                 error_msg = f"Unexpected error: {str(e)}"
                 self.logger.error(f"💥 {error_msg}: {task.file_path}")
 
@@ -335,7 +335,8 @@ class ParallelDownloader:
 
         # Run integrity check in thread pool to avoid blocking
         loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        max_workers = min(2, max(1, self.max_concurrent_downloads // 2))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             return await loop.run_in_executor(executor, verify)
 
     async def _add_to_cache(self, task: DownloadTask) -> None:
@@ -363,7 +364,7 @@ class ParallelDownloader:
                     local_file_path=task.local_path,
                     checksums=checksums,
                 )
-            except Exception as e:
+            except (OSError, IOError, ValueError) as e:
                 self.logger.warning(f"Failed to add {task.file_path} to cache: {e}")
 
         # Run cache operation in thread pool

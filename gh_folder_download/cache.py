@@ -88,7 +88,7 @@ class DownloadCache:
                 self.logger.debug(f"Loaded cache with {len(self.cache_data)} entries")
             else:
                 self.logger.debug("No existing cache found, starting fresh")
-        except (json.JSONDecodeError, KeyError, ValueError) as e:
+        except (json.JSONDecodeError, KeyError, ValueError, OSError, IOError) as e:
             self.logger.warning(f"Failed to load cache, starting fresh: {e}")
             self.cache_data = {}
 
@@ -208,8 +208,8 @@ class DownloadCache:
         self.cache_data[cache_key] = cache_entry
         self.logger.debug(f"Added file to cache: {file_path}")
 
-        # Save cache periodically (every 10 new entries)
-        if len(self.cache_data) % 10 == 0:
+        # Save cache periodically (every 10 new entries) or when cache is small
+        if len(self.cache_data) % 10 == 0 or len(self.cache_data) <= 5:
             self._save_cache()
 
     def get_cached_checksums(

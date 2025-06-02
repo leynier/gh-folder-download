@@ -218,7 +218,7 @@ class ConfigManager:
             self.logger.debug("Configuration loaded successfully")
             if self.config_file_path:
                 self.logger.debug(f"Config file: {self.config_file_path}")
-        except Exception as e:
+        except (ValueError, TypeError, AttributeError) as e:
             self.logger.warning(f"Invalid configuration: {e}")
             self.config = GHFolderDownloadConfig()
 
@@ -232,7 +232,7 @@ class ConfigManager:
                 data = yaml.safe_load(f) or {}
             self.logger.debug(f"Loaded {len(data)} configuration sections")
             return data
-        except Exception as e:
+        except (OSError, IOError, yaml.YAMLError) as e:
             self.logger.warning(f"Failed to load config from {file_path}: {e}")
             return {}
 
@@ -313,7 +313,7 @@ class ConfigManager:
             file_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Convert config to dict, excluding defaults for cleaner file
-            config_dict = self.config.dict(exclude_defaults=True)
+            config_dict = self.config.model_dump(exclude_defaults=True)
 
             with open(file_path, "w", encoding="utf-8") as f:
                 yaml.dump(
@@ -323,7 +323,7 @@ class ConfigManager:
             self.logger.info(f"Configuration saved to: {file_path}")
             return True
 
-        except Exception as e:
+        except (OSError, IOError, yaml.YAMLError) as e:
             self.logger.error(f"Failed to save configuration: {e}")
             return False
 
@@ -408,13 +408,13 @@ ui:
                 f.write(sample_config)
             self.logger.info(f"Sample configuration created: {file_path}")
             return True
-        except Exception as e:
+        except (OSError, IOError) as e:
             self.logger.error(f"Failed to create sample configuration: {e}")
             return False
 
     def get_effective_config(self) -> dict[str, Any]:
         """Get the effective configuration as a dictionary."""
-        return self.config.dict()
+        return self.config.model_dump()
 
     def validate_config(self) -> list[str]:
         """
@@ -427,8 +427,8 @@ ui:
 
         try:
             # This will raise ValidationError if invalid
-            GHFolderDownloadConfig(**self.config.dict())
-        except Exception as e:
+            GHFolderDownloadConfig(**self.config.model_dump())
+        except (ValueError, TypeError) as e:
             issues.append(f"Configuration validation failed: {e}")
 
         # Additional custom validations

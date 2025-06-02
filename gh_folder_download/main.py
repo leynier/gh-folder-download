@@ -381,8 +381,10 @@ def download_command(
                     show_progress=show_progress,
                 )
             else:
-                # Use rate-limited client (we know github_client is not None here)
-                assert github_client is not None
+                # Use rate-limited client
+                if github_client is None:
+                    logger.error("Rate-limited client not properly initialized")
+                    raise typer.Exit(1)
                 stats = download_folder_parallel(
                     repository=repository,
                     sha=sha,
