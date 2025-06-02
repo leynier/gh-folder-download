@@ -1,6 +1,6 @@
 [project]
 name = "gh-folder-download"
-version = "0.1.0"
+version = "1.0.0"
 description = "A command line application (CLI) to download only a specific folder without downloading the full repository implemented with Python using Typer and GitHub API."
 authors = [
     { name = "Leynier Gutiérrez González", email = "leynier41@gmail.com" },
