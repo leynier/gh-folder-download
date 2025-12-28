@@ -90,7 +90,7 @@ def download_folder_parallel(
         # Get directory contents with rate limiting and retry
         def get_contents():
             github_client.rate_limiter.wait_if_needed()
-            return repository.get_dir_contents(current_path, ref=sha)
+            return repository.get_contents(current_path, ref=sha)
 
         try:
             contents = api_retry_handler.retry_api_call(get_contents, f"get directory contents for {current_path}")
@@ -219,7 +219,7 @@ def download_folder_parallel_no_rate_limit(
 
         # Get directory contents without rate limiting
         def get_contents():
-            return repository.get_dir_contents(current_path, ref=sha)
+            return repository.get_contents(current_path, ref=sha)
 
         try:
             contents = api_retry_handler.retry_api_call(get_contents, f"get directory contents for {current_path}")
@@ -344,7 +344,7 @@ def download_folder(
 
     # Get directory contents with retry
     def get_contents():
-        return repository.get_dir_contents(path, ref=sha)
+        return repository.get_contents(path, ref=sha)
 
     try:
         logger.debug(f"Getting contents for path: {path}")

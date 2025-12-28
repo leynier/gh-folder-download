@@ -5,7 +5,7 @@ Rate limiting system for GitHub API calls in gh-folder-download.
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from github import Github, GithubException
 
@@ -76,7 +76,7 @@ class GitHubRateLimiter:
         """Update rate limit information from GitHub API."""
         try:
             with self._lock:
-                rate_limit = self.github.get_rate_limit()
+                rate_limit = cast(Any, self.github.get_rate_limit())
 
                 # Core API rate limit
                 core = rate_limit.core
