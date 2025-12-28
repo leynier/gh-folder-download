@@ -1,8 +1,33 @@
-exclude = ["mesirve/data/migrations"]
-line-length = 88
+exclude = [
+    "mesirve/data/migrations",
+    ".venv",
+    ".git",
+    "__pycache__",
+    "build",
+    "dist",
+]
+line-length = 120
+target-version = "py312"
 
-[format]
-line-ending = "lf"
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "C",   # flake8-comprehensions
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "N",   # pep8-naming
+    "SIM", # flake8-simplify
+]
+ignore = ["B008", "C901"]
 
 [lint.per-file-ignores]
 "__init__.py" = ["F401"]
+
+[format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"

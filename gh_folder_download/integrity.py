@@ -64,8 +64,8 @@ class FileIntegrityChecker:
             self.logger.debug(f"Checksums calculated: {checksums}")
             return checksums
 
-        except (OSError, IOError) as e:
-            raise IntegrityError(f"Failed to calculate checksums for {file_path}: {e}")
+        except OSError as e:
+            raise IntegrityError(f"Failed to calculate checksums for {file_path}: {e}") from e
 
     def verify_file_size(self, file_path: Path, expected_size: int | None) -> bool:
         """
@@ -82,9 +82,7 @@ class FileIntegrityChecker:
             IntegrityError: If file size doesn't match
         """
         if expected_size is None:
-            self.logger.debug(
-                f"Skipping size verification for {file_path} (no expected size)"
-            )
+            self.logger.debug(f"Skipping size verification for {file_path} (no expected size)")
             return True
 
         if not file_path.exists():
@@ -92,20 +90,17 @@ class FileIntegrityChecker:
 
         try:
             actual_size = file_path.stat().st_size
-            self.logger.debug(
-                f"File size check: {actual_size} bytes (expected: {expected_size})"
-            )
+            self.logger.debug(f"File size check: {actual_size} bytes (expected: {expected_size})")
 
             if actual_size != expected_size:
                 raise IntegrityError(
-                    f"File size mismatch for {file_path}: "
-                    f"expected {expected_size} bytes, got {actual_size} bytes"
+                    f"File size mismatch for {file_path}: expected {expected_size} bytes, got {actual_size} bytes"
                 )
 
             return True
 
-        except (OSError, IOError) as e:
-            raise IntegrityError(f"Failed to get file size for {file_path}: {e}")
+        except OSError as e:
+            raise IntegrityError(f"Failed to get file size for {file_path}: {e}") from e
 
     def verify_checksum(
         self,
@@ -193,14 +188,10 @@ class FileIntegrityChecker:
                     # Simple binary detection
                     if first_bytes:
                         # Count non-printable characters
-                        non_printable = sum(
-                            1 for b in first_bytes if b < 32 and b not in [9, 10, 13]
-                        )
-                        results["appears_binary"] = (
-                            non_printable > len(first_bytes) * 0.1
-                        )
+                        non_printable = sum(1 for b in first_bytes if b < 32 and b not in [9, 10, 13])
+                        results["appears_binary"] = non_printable > len(first_bytes) * 0.1
 
-            except (OSError, IOError):
+            except OSError:
                 results["is_readable"] = False
 
             # Log results
@@ -215,8 +206,8 @@ class FileIntegrityChecker:
 
             return results
 
-        except (OSError, IOError) as e:
-            raise IntegrityError(f"Failed to verify content for {file_path}: {e}")
+        except OSError as e:
+            raise IntegrityError(f"Failed to verify content for {file_path}: {e}") from e
 
     def comprehensive_verify(
         self,
@@ -259,9 +250,7 @@ class FileIntegrityChecker:
                 verification_results["size_verified"] = True
                 self.logger.debug("✅ Size verification passed")
             else:
-                verification_results["size_verified"] = (
-                    True  # No expected size to check
-                )
+                verification_results["size_verified"] = True  # No expected size to check
 
             # 2. Calculate all checksums
             verification_results["checksums"] = self.calculate_checksums(file_path)
@@ -272,9 +261,7 @@ class FileIntegrityChecker:
                 verification_results["checksum_verified"] = True
                 self.logger.debug("✅ Checksum verification passed")
             else:
-                verification_results["checksum_verified"] = (
-                    True  # No expected checksum to check
-                )
+                verification_results["checksum_verified"] = True  # No expected checksum to check
 
             # 4. Verify file content
             verification_results["content_info"] = self.verify_file_content(file_path)
@@ -305,7 +292,7 @@ class FileIntegrityChecker:
         """
         self.logger.debug(f"Creating integrity report for: {file_path}")
 
-        report = {
+        report: dict[str, Any] = {
             "file_path": str(file_path),
             "timestamp": None,
             "file_exists": False,

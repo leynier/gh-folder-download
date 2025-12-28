@@ -1,6 +1,6 @@
 [project]
 name = "gh-folder-download"
-version = "1.0.0"
+version = "1.0.1"
 description = "A command line application (CLI) to download only a specific folder without downloading the full repository implemented with Python using Typer and GitHub API."
 authors = [
     { name = "Leynier Gutiérrez González", email = "leynier41@gmail.com" },
@@ -29,8 +29,13 @@ dependencies = [
     "typer>=0.16.0",
 ]
 
-[tool.uv]
-dev-dependencies = ["ruff>=0.11.12"]
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --asyncio-mode=auto"
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = ["ruff>=0.11.12", "pytest>=8.0.0", "pytest-asyncio>=0.23.0", "ty>=0.0.7"]
 
 [project.urls]
 homepage = "https://github.com/leynier/gh-folder-download"

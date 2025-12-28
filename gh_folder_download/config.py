@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 from .logger import get_logger
 
@@ -17,40 +17,22 @@ from .logger import get_logger
 class DownloadConfig(BaseModel):
     """Download-related configuration."""
 
-    max_concurrent: int = Field(
-        default=5, ge=1, le=20, description="Maximum concurrent downloads"
-    )
-    timeout: int = Field(
-        default=30, ge=5, le=300, description="Download timeout in seconds"
-    )
-    chunk_size: int = Field(
-        default=8192, ge=1024, le=65536, description="Download chunk size"
-    )
-    max_retries: int = Field(
-        default=3, ge=1, le=10, description="Maximum retry attempts"
-    )
-    retry_delay: float = Field(
-        default=1.0, ge=0.1, le=30.0, description="Base retry delay"
-    )
+    max_concurrent: int = Field(default=5, ge=1, le=20, description="Maximum concurrent downloads")
+    timeout: int = Field(default=30, ge=5, le=300, description="Download timeout in seconds")
+    chunk_size: int = Field(default=8192, ge=1024, le=65536, description="Download chunk size")
+    max_retries: int = Field(default=3, ge=1, le=10, description="Maximum retry attempts")
+    retry_delay: float = Field(default=1.0, ge=0.1, le=30.0, description="Base retry delay")
     verify_integrity: bool = Field(default=True, description="Verify file integrity")
-    parallel_downloads: bool = Field(
-        default=True, description="Enable parallel downloads"
-    )
+    parallel_downloads: bool = Field(default=True, description="Enable parallel downloads")
 
 
 class CacheConfig(BaseModel):
     """Cache-related configuration."""
 
     enabled: bool = Field(default=True, description="Enable caching")
-    max_size_gb: float = Field(
-        default=5.0, ge=0.1, le=100.0, description="Maximum cache size in GB"
-    )
-    max_age_days: int = Field(
-        default=30, ge=1, le=365, description="Maximum cache age in days"
-    )
-    auto_cleanup: bool = Field(
-        default=True, description="Enable automatic cache cleanup"
-    )
+    max_size_gb: float = Field(default=5.0, ge=0.1, le=100.0, description="Maximum cache size in GB")
+    max_age_days: int = Field(default=30, ge=1, le=365, description="Maximum cache age in days")
+    auto_cleanup: bool = Field(default=True, description="Enable automatic cache cleanup")
 
 
 class RateLimitConfig(BaseModel):
@@ -58,48 +40,31 @@ class RateLimitConfig(BaseModel):
 
     enabled: bool = Field(default=True, description="Enable rate limiting")
     buffer: int = Field(default=100, ge=10, le=1000, description="Rate limit buffer")
-    aggressive_mode: bool = Field(
-        default=False, description="Use aggressive rate limiting"
-    )
+    aggressive_mode: bool = Field(default=False, description="Use aggressive rate limiting")
 
 
 class FilterConfig(BaseModel):
     """File filtering configuration."""
 
     # Extension filters
-    include_extensions: list[str] = Field(
-        default_factory=list, description="Include only these extensions"
-    )
-    exclude_extensions: list[str] = Field(
-        default_factory=list, description="Exclude these extensions"
-    )
+    include_extensions: list[str] = Field(default_factory=list, description="Include only these extensions")
+    exclude_extensions: list[str] = Field(default_factory=list, description="Exclude these extensions")
 
     # Size filters
-    min_size_bytes: int | None = Field(
-        default=None, ge=0, description="Minimum file size in bytes"
-    )
-    max_size_bytes: int | None = Field(
-        default=None, ge=0, description="Maximum file size in bytes"
-    )
+    min_size_bytes: int | None = Field(default=None, ge=0, description="Minimum file size in bytes")
+    max_size_bytes: int | None = Field(default=None, ge=0, description="Maximum file size in bytes")
 
     # Pattern filters
-    include_patterns: list[str] = Field(
-        default_factory=list, description="Include files matching these patterns"
-    )
-    exclude_patterns: list[str] = Field(
-        default_factory=list, description="Exclude files matching these patterns"
-    )
+    include_patterns: list[str] = Field(default_factory=list, description="Include files matching these patterns")
+    exclude_patterns: list[str] = Field(default_factory=list, description="Exclude files matching these patterns")
 
     # Special filters
     exclude_binary: bool = Field(default=False, description="Exclude binary files")
-    exclude_large_files: bool = Field(
-        default=False, description="Exclude files larger than 10MB"
-    )
-    respect_gitignore: bool = Field(
-        default=False, description="Respect .gitignore rules"
-    )
+    exclude_large_files: bool = Field(default=False, description="Exclude files larger than 10MB")
+    respect_gitignore: bool = Field(default=False, description="Respect .gitignore rules")
 
-    @validator("include_extensions", "exclude_extensions", pre=True)
+    @field_validator("include_extensions", "exclude_extensions", mode="before")
+    @classmethod
     def normalize_extensions(cls, v):
         """Normalize extensions to start with a dot."""
         if isinstance(v, str):
@@ -111,12 +76,8 @@ class PathConfig(BaseModel):
     """Path-related configuration."""
 
     default_output: str = Field(default=".", description="Default output directory")
-    create_subdirs: bool = Field(
-        default=True, description="Create subdirectories for organization"
-    )
-    preserve_structure: bool = Field(
-        default=True, description="Preserve repository structure"
-    )
+    create_subdirs: bool = Field(default=True, description="Create subdirectories for organization")
+    preserve_structure: bool = Field(default=True, description="Preserve repository structure")
 
 
 class UIConfig(BaseModel):
@@ -132,9 +93,7 @@ class GHFolderDownloadConfig(BaseModel):
     """Main configuration model."""
 
     # Authentication
-    github_token: str | None = Field(
-        default=None, description="GitHub personal access token"
-    )
+    github_token: str | None = Field(default=None, description="GitHub personal access token")
 
     # Main sections
     download: DownloadConfig = Field(default_factory=DownloadConfig)
@@ -144,7 +103,8 @@ class GHFolderDownloadConfig(BaseModel):
     paths: PathConfig = Field(default_factory=PathConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
 
-    @validator("github_token", pre=True)
+    @field_validator("github_token", mode="before")
+    @classmethod
     def validate_github_token(cls, v):
         """Validate GitHub token format."""
         if not v:
@@ -255,11 +215,11 @@ class ConfigManager:
         """Load configuration from YAML file."""
         try:
             self.logger.debug(f"Loading config from: {file_path}")
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
             self.logger.debug(f"Loaded {len(data)} configuration sections")
             return data
-        except (OSError, IOError, yaml.YAMLError) as e:
+        except (OSError, yaml.YAMLError) as e:
             self.logger.warning(f"Failed to load config from {file_path}: {e}")
             return {}
 
@@ -284,9 +244,7 @@ class ConfigManager:
         for env_var, config_path in env_mappings.items():
             value = os.environ.get(env_var)
             if value is not None:
-                self._set_nested_value(
-                    config_data, config_path, self._convert_env_value(value)
-                )
+                self._set_nested_value(config_data, config_path, self._convert_env_value(value))
 
         return config_data
 
@@ -319,9 +277,7 @@ class ConfigManager:
             if "." in value:
                 parsed_float = float(value)
                 # Ensure it's a valid number (not NaN or infinity)
-                if not (
-                    parsed_float != parsed_float or abs(parsed_float) == float("inf")
-                ):
+                if not (parsed_float != parsed_float or abs(parsed_float) == float("inf")):
                     return parsed_float
             else:
                 parsed_int = int(value)
@@ -354,14 +310,12 @@ class ConfigManager:
             config_dict = self.config.model_dump(exclude_defaults=True)
 
             with open(file_path, "w", encoding="utf-8") as f:
-                yaml.dump(
-                    config_dict, f, default_flow_style=False, sort_keys=True, indent=2
-                )
+                yaml.dump(config_dict, f, default_flow_style=False, sort_keys=True, indent=2)
 
             self.logger.info(f"Configuration saved to: {file_path}")
             return True
 
-        except (OSError, IOError, yaml.YAMLError) as e:
+        except (OSError, yaml.YAMLError) as e:
             self.logger.error(f"Failed to save configuration: {e}")
             return False
 
@@ -446,7 +400,7 @@ ui:
                 f.write(sample_config)
             self.logger.info(f"Sample configuration created: {file_path}")
             return True
-        except (OSError, IOError) as e:
+        except OSError as e:
             self.logger.error(f"Failed to create sample configuration: {e}")
             return False
 
@@ -474,9 +428,7 @@ ui:
             issues.append("max_concurrent should not exceed 20 for optimal performance")
 
         if self.config.cache.max_size_gb > 50:
-            issues.append(
-                "cache size larger than 50GB may consume significant disk space"
-            )
+            issues.append("cache size larger than 50GB may consume significant disk space")
 
         return issues
 

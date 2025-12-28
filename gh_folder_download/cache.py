@@ -80,15 +80,13 @@ class DownloadCache:
         """Load cache data from disk."""
         try:
             if self.cache_file.exists():
-                with open(self.cache_file, "r") as f:
+                with open(self.cache_file) as f:
                     data = json.load(f)
-                    self.cache_data = {
-                        key: CacheEntry.from_dict(value) for key, value in data.items()
-                    }
+                    self.cache_data = {key: CacheEntry.from_dict(value) for key, value in data.items()}
                 self.logger.debug(f"Loaded cache with {len(self.cache_data)} entries")
             else:
                 self.logger.debug("No existing cache found, starting fresh")
-        except (json.JSONDecodeError, KeyError, ValueError, OSError, IOError) as e:
+        except (json.JSONDecodeError, KeyError, ValueError, OSError) as e:
             self.logger.warning(f"Failed to load cache, starting fresh: {e}")
             self.cache_data = {}
 
@@ -99,7 +97,7 @@ class DownloadCache:
             with open(self.cache_file, "w") as f:
                 json.dump(data, f, indent=2)
             self.logger.debug(f"Saved cache with {len(self.cache_data)} entries")
-        except (OSError, IOError) as e:
+        except OSError as e:
             self.logger.warning(f"Failed to save cache: {e}")
 
     def _get_cache_key(self, repo_full_name: str, file_path: str, ref: str) -> str:

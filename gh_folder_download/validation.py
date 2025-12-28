@@ -54,9 +54,7 @@ class InputValidator:
 
         # Basic URL structure validation
         if not url.startswith("https://github.com/"):
-            raise ValidationError(
-                "Invalid GitHub URL - must start with 'https://github.com/'"
-            )
+            raise ValidationError("Invalid GitHub URL - must start with 'https://github.com/'")
 
         # Parse URL components
         try:
@@ -64,15 +62,13 @@ class InputValidator:
             if parsed.netloc != "github.com":
                 raise ValidationError("Invalid GitHub domain")
         except Exception as e:
-            raise ValidationError(f"Malformed URL: {e}")
+            raise ValidationError(f"Malformed URL: {e}") from e
 
         # Extract path components
         path_parts = parsed.path.strip("/").split("/")
 
         if len(path_parts) < 2:
-            raise ValidationError(
-                "Invalid GitHub URL - must include owner and repository"
-            )
+            raise ValidationError("Invalid GitHub URL - must include owner and repository")
 
         org = path_parts[0]
         repo = path_parts[1]
@@ -95,9 +91,7 @@ class InputValidator:
                     folder_path = "/".join(path_parts[4:])
             else:
                 # Direct path without /tree/ - not standard GitHub URL
-                raise ValidationError(
-                    "Invalid GitHub URL format - use /tree/branch/path format for specific folders"
-                )
+                raise ValidationError("Invalid GitHub URL format - use /tree/branch/path format for specific folders")
 
         # Validate branch name if provided
         if branch and not self._is_valid_git_ref(branch):
@@ -107,9 +101,7 @@ class InputValidator:
         if folder_path and not self._is_valid_path(folder_path):
             raise ValidationError(f"Invalid folder path: {folder_path}")
 
-        self.logger.debug(
-            f"Validated URL - Org: {org}, Repo: {repo}, Branch: {branch}, Path: {folder_path}"
-        )
+        self.logger.debug(f"Validated URL - Org: {org}, Repo: {repo}, Branch: {branch}, Path: {folder_path}")
         return org, repo, branch, folder_path
 
     def validate_output_path(
@@ -154,15 +146,13 @@ class InputValidator:
 
             # If output path exists, check if it's a directory
             if abs_path.exists() and not abs_path.is_dir():
-                raise ValidationError(
-                    f"Output path exists but is not a directory: {abs_path}"
-                )
+                raise ValidationError(f"Output path exists but is not a directory: {abs_path}")
 
             self.logger.debug(f"Output path validated: {abs_path}")
             return abs_path
 
         except (OSError, PermissionError) as e:
-            raise ValidationError(f"Invalid output path: {e}")
+            raise ValidationError(f"Invalid output path: {e}") from e
 
     def validate_github_token(self, token: str | None) -> str | None:
         """
@@ -223,9 +213,9 @@ class InputValidator:
             return token
         except GithubException as e:
             if e.status == 401:
-                raise ValidationError("Invalid GitHub token - authentication failed")
+                raise ValidationError("Invalid GitHub token - authentication failed") from e
             elif e.status == 403:
-                raise ValidationError("GitHub token has insufficient permissions")
+                raise ValidationError("GitHub token has insufficient permissions") from e
             else:
                 self.logger.warning(f"Could not fully validate token: {e}")
                 return token  # Return token anyway, might be a temporary API issue
@@ -264,18 +254,14 @@ class InputValidator:
                 raise ValidationError(f"Log file parent is not a directory: {parent}")
 
             if not self._is_writable(parent):
-                raise ValidationError(
-                    f"No write permission for log directory: {parent}"
-                )
+                raise ValidationError(f"No write permission for log directory: {parent}")
 
             # If log file exists, check if it's writable
             if abs_path.exists():
                 if abs_path.is_dir():
                     raise ValidationError(f"Log file path is a directory: {abs_path}")
                 if not abs_path.is_file():
-                    raise ValidationError(
-                        f"Log file path is not a regular file: {abs_path}"
-                    )
+                    raise ValidationError(f"Log file path is not a regular file: {abs_path}")
                 if not self._is_writable(abs_path):
                     raise ValidationError(f"Log file is not writable: {abs_path}")
 
@@ -283,7 +269,7 @@ class InputValidator:
             return abs_path
 
         except (OSError, PermissionError) as e:
-            raise ValidationError(f"Invalid log file path: {e}")
+            raise ValidationError(f"Invalid log file path: {e}") from e
 
     def _is_valid_git_ref(self, ref: str) -> bool:
         """Check if a string is a valid Git reference name."""
@@ -297,10 +283,7 @@ class InputValidator:
                 return False
 
         # Check for control characters
-        if any(ord(c) < 32 or ord(c) == 127 for c in ref):
-            return False
-
-        return True
+        return not any(ord(c) < 32 or ord(c) == 127 for c in ref)
 
     def _is_valid_path(self, path: str) -> bool:
         """Check if a string is a valid file path."""
@@ -313,11 +296,7 @@ class InputValidator:
 
         # Check for dangerous path components
         dangerous = ["..", "./", "\\"]
-        for danger in dangerous:
-            if danger in path:
-                return False
-
-        return True
+        return all(danger not in path for danger in dangerous)
 
     def _is_writable(self, path: Path) -> bool:
         """Check if a path is writable."""

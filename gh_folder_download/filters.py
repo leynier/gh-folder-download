@@ -26,12 +26,8 @@ class FileFilter:
         self.logger = get_logger()
 
         # Compile patterns for better performance
-        self.include_patterns = [
-            self._compile_pattern(p) for p in config.include_patterns
-        ]
-        self.exclude_patterns = [
-            self._compile_pattern(p) for p in config.exclude_patterns
-        ]
+        self.include_patterns = [self._compile_pattern(p) for p in config.include_patterns]
+        self.exclude_patterns = [self._compile_pattern(p) for p in config.exclude_patterns]
 
         # Load gitignore rules if requested
         self.gitignore_rules: list[str] = []
@@ -157,9 +153,7 @@ class FileFilter:
 
         # 3. Size filters
         if not self._check_size_filters(file_size):
-            self.logger.debug(
-                f"File excluded by size filter: {file_path} ({file_size} bytes)"
-            )
+            self.logger.debug(f"File excluded by size filter: {file_path} ({file_size} bytes)")
             return False
 
         # 4. Binary file filter
@@ -169,9 +163,7 @@ class FileFilter:
 
         # 5. Large file filter
         if not self._check_large_file_filter(file_size):
-            self.logger.debug(
-                f"File excluded by large file filter: {file_path} ({file_size} bytes)"
-            )
+            self.logger.debug(f"File excluded by large file filter: {file_path} ({file_size} bytes)")
             return False
 
         # 6. Gitignore filters (most expensive)
@@ -187,17 +179,13 @@ class FileFilter:
 
         # If include extensions are specified, file must match one of them
         if self.config.include_extensions:
-            include_match = any(
-                file_ext == ext.lower() for ext in self.config.include_extensions
-            )
+            include_match = any(file_ext == ext.lower() for ext in self.config.include_extensions)
             if not include_match:
                 return False
 
         # If exclude extensions are specified, file must not match any of them
         if self.config.exclude_extensions:
-            exclude_match = any(
-                file_ext == ext.lower() for ext in self.config.exclude_extensions
-            )
+            exclude_match = any(file_ext == ext.lower() for ext in self.config.exclude_extensions)
             if exclude_match:
                 return False
 
@@ -207,17 +195,13 @@ class FileFilter:
         """Check pattern include/exclude filters."""
         # If include patterns are specified, file must match at least one
         if self.include_patterns:
-            include_match = any(
-                pattern.match(file_path) for pattern in self.include_patterns
-            )
+            include_match = any(pattern.match(file_path) for pattern in self.include_patterns)
             if not include_match:
                 return False
 
         # If exclude patterns are specified, file must not match any
         if self.exclude_patterns:
-            exclude_match = any(
-                pattern.match(file_path) for pattern in self.exclude_patterns
-            )
+            exclude_match = any(pattern.match(file_path) for pattern in self.exclude_patterns)
             if exclude_match:
                 return False
 
@@ -229,20 +213,13 @@ class FileFilter:
             return True  # Can't filter if size is unknown
 
         # Check minimum size
-        if self.config.min_size_bytes is not None:
-            if file_size < self.config.min_size_bytes:
-                return False
+        if self.config.min_size_bytes is not None and file_size < self.config.min_size_bytes:
+            return False
 
         # Check maximum size
-        if self.config.max_size_bytes is not None:
-            if file_size > self.config.max_size_bytes:
-                return False
+        return not (self.config.max_size_bytes is not None and file_size > self.config.max_size_bytes)
 
-        return True
-
-    def _check_binary_filter(
-        self, file_path: str, content_file: ContentFile | None = None
-    ) -> bool:
+    def _check_binary_filter(self, file_path: str, content_file: ContentFile | None = None) -> bool:
         """Check if file should be excluded as binary."""
         if not self.config.exclude_binary:
             return True
@@ -253,11 +230,12 @@ class FileFilter:
             return False
 
         # Check GitHub's file type detection if available
-        if content_file and hasattr(content_file, "type"):
-            if content_file.type == "file" and self._is_likely_binary_name(file_path):
-                return False
-
-        return True
+        return not (
+            content_file
+            and hasattr(content_file, "type")
+            and content_file.type == "file"
+            and self._is_likely_binary_name(file_path)
+        )
 
     def _check_large_file_filter(self, file_size: int | None) -> bool:
         """Check large file filter (10MB default)."""
@@ -277,11 +255,7 @@ class FileFilter:
             return True
 
         # Check each gitignore pattern
-        for pattern in self.gitignore_rules:
-            if self._matches_gitignore_pattern(file_path, pattern):
-                return False
-
-        return True
+        return all(not self._matches_gitignore_pattern(file_path, pattern) for pattern in self.gitignore_rules)
 
     def _compile_pattern(self, pattern: str) -> re.Pattern:
         """Convert glob pattern to regex for efficient matching."""
@@ -387,9 +361,7 @@ class FileFilter:
             "exclude_binary": self.config.exclude_binary,
             "exclude_large_files": self.config.exclude_large_files,
             "respect_gitignore": self.config.respect_gitignore,
-            "gitignore_rules_count": len(self.gitignore_rules)
-            if self.config.respect_gitignore
-            else 0,
+            "gitignore_rules_count": len(self.gitignore_rules) if self.config.respect_gitignore else 0,
         }
 
 
@@ -592,8 +564,6 @@ def get_preset_filter(preset_name: str) -> FilterConfig:
 
     if preset_name not in presets:
         available = ", ".join(presets.keys())
-        raise ValueError(
-            f"Unknown preset '{preset_name}'. Available presets: {available}"
-        )
+        raise ValueError(f"Unknown preset '{preset_name}'. Available presets: {available}")
 
     return presets[preset_name]()

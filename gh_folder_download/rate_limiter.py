@@ -26,9 +26,7 @@ class RateLimitInfo:
         """Human readable reset time."""
         import datetime
 
-        return datetime.datetime.fromtimestamp(self.reset_time).strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
+        return datetime.datetime.fromtimestamp(self.reset_time).strftime("%Y-%m-%d %H:%M:%S")
 
     @property
     def seconds_until_reset(self) -> int:
@@ -165,10 +163,7 @@ class GitHubRateLimiter:
         if self._should_update_rate_limit():
             self._update_rate_limit_info()
 
-        if operation_type == "search":
-            rate_limit = self._search_rate_limit
-        else:
-            rate_limit = self._core_rate_limit
+        rate_limit = self._search_rate_limit if operation_type == "search" else self._core_rate_limit
 
         if rate_limit is None:
             # Fallback to base delay if no rate limit info
@@ -238,10 +233,7 @@ class GitHubRateLimiter:
 
     def is_rate_limited(self, operation_type: str = "core") -> bool:
         """Check if we're currently rate limited."""
-        if operation_type == "search":
-            rate_limit = self._search_rate_limit
-        else:
-            rate_limit = self._core_rate_limit
+        rate_limit = self._search_rate_limit if operation_type == "search" else self._core_rate_limit
 
         if rate_limit is None:
             return False
@@ -253,10 +245,7 @@ class GitHubRateLimiter:
         if not self.is_rate_limited(operation_type):
             return 0
 
-        if operation_type == "search":
-            rate_limit = self._search_rate_limit
-        else:
-            rate_limit = self._core_rate_limit
+        rate_limit = self._search_rate_limit if operation_type == "search" else self._core_rate_limit
 
         if rate_limit is None:
             return 0
@@ -318,9 +307,7 @@ class RateLimitedGitHubClient:
                 # Wait and retry once
                 wait_time = self.rate_limiter.get_wait_time(operation_type)
                 if wait_time > 0:
-                    self.logger.info(
-                        f"Waiting {wait_time} seconds for rate limit reset"
-                    )
+                    self.logger.info(f"Waiting {wait_time} seconds for rate limit reset")
                     time.sleep(wait_time)
                     return func(*args, **kwargs)
             raise

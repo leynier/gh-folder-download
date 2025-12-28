@@ -121,9 +121,7 @@ class GHFolderLogger:
             self.console.print(table)
 
         # Also log to file handlers
-        self.logger.info(
-            f"REPOSITORY_INFO: {org}/{repo}, branch: {branch}, path: {path or '(root)'}"
-        )
+        self.logger.info(f"REPOSITORY_INFO: {org}/{repo}, branch: {branch}, path: {path or '(root)'}")
 
     def summary(self, total_files: int, total_size: int, duration: float) -> None:
         """Display download summary."""
@@ -135,23 +133,14 @@ class GHFolderLogger:
             table.add_row("Total Files", str(total_files))
             table.add_row("Total Size", self._format_size(total_size))
             table.add_row("Duration", f"{duration:.2f} seconds")
-            if duration > 0:
-                avg_speed = self._format_size(int(total_size / duration)) + "/s"
-            else:
-                avg_speed = "N/A"
+            avg_speed = self._format_size(int(total_size / duration)) + "/s" if duration > 0 else "N/A"
             table.add_row("Average Speed", avg_speed)
 
             self.console.print(table)
 
         # Also log to file handlers
-        speed = (
-            f"{self._format_size(int(total_size / duration))}/s"
-            if duration > 0
-            else "N/A"
-        )
-        self.logger.info(
-            f"SUMMARY: {total_files} files, {self._format_size(total_size)}, {duration:.2f}s, {speed}"
-        )
+        speed = f"{self._format_size(int(total_size / duration))}/s" if duration > 0 else "N/A"
+        self.logger.info(f"SUMMARY: {total_files} files, {self._format_size(total_size)}, {duration:.2f}s, {speed}")
 
     @staticmethod
     def _format_size(size_bytes: int | None) -> str:

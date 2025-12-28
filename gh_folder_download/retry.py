@@ -4,8 +4,9 @@ Retry mechanism with exponential backoff for gh-folder-download.
 
 import re
 import time
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 from github import GithubException
 
@@ -86,9 +87,8 @@ class RetryHandler:
 
         for attempt in range(retry_config.max_attempts):
             try:
-                self.logger.debug(
-                    f"Attempt {attempt + 1}/{retry_config.max_attempts} for {func.__name__}"
-                )
+                func_name = getattr(func, "__name__", str(func))
+                self.logger.debug(f"Attempt {attempt + 1}/{retry_config.max_attempts} for {func_name}")
                 return func(*args, **kwargs)
 
             except Exception as e:
@@ -100,24 +100,19 @@ class RetryHandler:
 
                 if attempt + 1 >= retry_config.max_attempts:
                     self.logger.error(
-                        f"All {retry_config.max_attempts} attempts failed for {func.__name__}"
+                        f"All {retry_config.max_attempts} attempts failed for {getattr(func, '__name__', str(func))}"
                     )
                     break
 
                 delay = self._calculate_delay(attempt, retry_config)
 
                 # Special handling for GitHub rate limiting
-                if (
-                    isinstance(e, GithubException)
-                    and cast(GithubException, e).status == 403
-                ):
+                if isinstance(e, GithubException) and e.status == 403:
                     # Check if it's rate limiting
                     if "rate limit" in str(e).lower():
                         # Use longer delay for rate limiting
                         delay = max(delay, 60)  # At least 1 minute
-                        self.logger.warning(
-                            f"Rate limit exceeded, waiting {delay:.1f} seconds"
-                        )
+                        self.logger.warning(f"Rate limit exceeded, waiting {delay:.1f} seconds")
                     else:
                         self.logger.warning(f"GitHub permission error: {e}")
                 else:
@@ -127,9 +122,7 @@ class RetryHandler:
                 time.sleep(delay)
 
         # All attempts failed
-        raise RetryError(
-            f"Failed after {retry_config.max_attempts} attempts: {last_exception}"
-        )
+        raise RetryError(f"Failed after {retry_config.max_attempts} attempts: {last_exception}")
 
     def _is_retryable(self, exception: Exception) -> bool:
         """Check if an exception should trigger a retry."""
@@ -140,9 +133,7 @@ class RetryHandler:
 
         # Check for GitHub API exceptions
         if isinstance(exception, GithubException):
-            return (
-                cast(GithubException, exception).status in self.RETRYABLE_GITHUB_STATUS
-            )
+            return cast(GithubException, exception).status in self.RETRYABLE_GITHUB_STATUS
 
         # Check for specific error messages that indicate temporary issues
         error_msg = str(exception).lower()
@@ -157,10 +148,7 @@ class RetryHandler:
 
         # Use word boundaries for more accurate matching
 
-        return any(
-            re.search(rf"\b{re.escape(indicator)}\b", error_msg)
-            for indicator in temporary_indicators
-        )
+        return any(re.search(rf"\b{re.escape(indicator)}\b", error_msg) for indicator in temporary_indicators)
 
     def _calculate_delay(self, attempt: int, config: RetryConfig) -> float:
         """Calculate delay for the next retry attempt."""
@@ -252,9 +240,7 @@ class DownloadRetryHandler(RetryHandler):
         try:
             return self.retry(wrapper)
         except RetryError as e:
-            self.logger.error(
-                f"Failed to download {file_path} after all retry attempts: {e}"
-            )
+            self.logger.error(f"Failed to download {file_path} after all retry attempts: {e}")
             raise
 
 
@@ -297,7 +283,5 @@ class APIRetryHandler(RetryHandler):
         try:
             return self.retry(wrapper)
         except RetryError as e:
-            self.logger.error(
-                f"API operation '{operation_name}' failed after all retry attempts: {e}"
-            )
+            self.logger.error(f"API operation '{operation_name}' failed after all retry attempts: {e}")
             raise

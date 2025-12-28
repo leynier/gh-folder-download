@@ -133,10 +133,7 @@ class ParallelDownloader:
 
         async with aiohttp.ClientSession(timeout=timeout_config) as session:
             # Create download coroutines
-            download_coroutines = [
-                self._download_single_file(session, semaphore, task)
-                for task in download_tasks
-            ]
+            download_coroutines = [self._download_single_file(session, semaphore, task) for task in download_tasks]
 
             # Execute downloads concurrently
             results = await asyncio.gather(*download_coroutines, return_exceptions=True)
@@ -153,9 +150,7 @@ class ParallelDownloader:
                     )
                     processed_results.append(error_result)
                     # Update progress for failed download
-                    self.progress_tracker.complete_file(
-                        download_tasks[i].file_path, success=False
-                    )
+                    self.progress_tracker.complete_file(download_tasks[i].file_path, success=False)
                 else:
                     processed_results.append(result)
 
@@ -196,9 +191,7 @@ class ParallelDownloader:
                 self.logger.debug(f"📁 Cache hit: {task.file_path}")
 
                 # Update progress for cached file
-                self.progress_tracker.complete_file(
-                    task.file_path, success=True, from_cache=True
-                )
+                self.progress_tracker.complete_file(task.file_path, success=True, from_cache=True)
 
                 return DownloadResult(
                     task=task,
@@ -217,14 +210,10 @@ class ParallelDownloader:
                 async with session.get(task.download_url) as response:
                     if response.status != 200:
                         error_msg = f"HTTP {response.status}: {response.reason}"
-                        self.logger.error(
-                            f"❌ Download failed for {task.file_path}: {error_msg}"
-                        )
+                        self.logger.error(f"❌ Download failed for {task.file_path}: {error_msg}")
 
                         # Update progress for failed file
-                        self.progress_tracker.complete_file(
-                            task.file_path, success=False
-                        )
+                        self.progress_tracker.complete_file(task.file_path, success=False)
 
                         return DownloadResult(
                             task=task,
@@ -236,16 +225,12 @@ class ParallelDownloader:
                     # Stream download with progress updates
                     total_downloaded = 0
                     with open(task.local_path, "wb") as file:
-                        async for chunk in response.content.iter_chunked(
-                            self.chunk_size
-                        ):
+                        async for chunk in response.content.iter_chunked(self.chunk_size):
                             file.write(chunk)
                             total_downloaded += len(chunk)
 
                             # Update progress
-                            self.progress_tracker.update_file_progress(
-                                task.file_path, total_downloaded
-                            )
+                            self.progress_tracker.update_file_progress(task.file_path, total_downloaded)
 
                 # Verify integrity if enabled
                 integrity_verified = True
@@ -256,9 +241,7 @@ class ParallelDownloader:
                 if self.cache and integrity_verified:
                     await self._add_to_cache(task)
 
-                self.logger.debug(
-                    f"✅ Downloaded: {task.file_path} ({total_downloaded} bytes)"
-                )
+                self.logger.debug(f"✅ Downloaded: {task.file_path} ({total_downloaded} bytes)")
 
                 # Update progress for completed file
                 self.progress_tracker.complete_file(task.file_path, success=True)
@@ -271,7 +254,7 @@ class ParallelDownloader:
                     integrity_verified=integrity_verified,
                 )
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 error_msg = f"Download timeout after {self.timeout}s"
                 self.logger.error(f"⏰ {error_msg}: {task.file_path}")
 
@@ -285,7 +268,7 @@ class ParallelDownloader:
                     duration=time.time() - start_time,
                 )
 
-            except (aiohttp.ClientError, OSError, IOError) as e:
+            except (aiohttp.ClientError, OSError) as e:
                 error_msg = f"Unexpected error: {str(e)}"
                 self.logger.error(f"💥 {error_msg}: {task.file_path}")
 
@@ -322,15 +305,11 @@ class ParallelDownloader:
             try:
                 # Type guard to ensure integrity_checker is not None
                 assert self.integrity_checker is not None
-                self.integrity_checker.verify_file_size(
-                    task.local_path, task.expected_size
-                )
+                self.integrity_checker.verify_file_size(task.local_path, task.expected_size)
                 self.integrity_checker.verify_file_content(task.local_path)
                 return True
             except IntegrityError as e:
-                self.logger.error(
-                    f"Integrity verification failed for {task.file_path}: {e}"
-                )
+                self.logger.error(f"Integrity verification failed for {task.file_path}: {e}")
                 return False
 
         # Run integrity check in thread pool to avoid blocking
@@ -349,9 +328,7 @@ class ParallelDownloader:
                 # Calculate checksums if integrity checker is available
                 checksums = None
                 if self.integrity_checker:
-                    checksums = self.integrity_checker.calculate_checksums(
-                        task.local_path
-                    )
+                    checksums = self.integrity_checker.calculate_checksums(task.local_path)
 
                 # Type guard to ensure cache is not None
                 assert self.cache is not None
@@ -364,7 +341,7 @@ class ParallelDownloader:
                     local_file_path=task.local_path,
                     checksums=checksums,
                 )
-            except (OSError, IOError, ValueError) as e:
+            except (OSError, ValueError) as e:
                 self.logger.warning(f"Failed to add {task.file_path} to cache: {e}")
 
         # Run cache operation in thread pool
@@ -392,19 +369,13 @@ class ParallelDownloader:
 
         # Calculate additional metrics
         if stats["total_time"] > 0:
-            stats["average_speed_mbps"] = (
-                stats["total_bytes"] / (1024 * 1024)
-            ) / stats["total_time"]
+            stats["average_speed_mbps"] = (stats["total_bytes"] / (1024 * 1024)) / stats["total_time"]
         else:
             stats["average_speed_mbps"] = 0
 
         if stats["total_downloads"] > 0:
-            stats["success_rate"] = (
-                stats["successful_downloads"] / stats["total_downloads"]
-            ) * 100
-            stats["cache_hit_rate"] = (
-                stats["cached_files"] / stats["total_downloads"]
-            ) * 100
+            stats["success_rate"] = (stats["successful_downloads"] / stats["total_downloads"]) * 100
+            stats["cache_hit_rate"] = (stats["cached_files"] / stats["total_downloads"]) * 100
         else:
             stats["success_rate"] = 0
             stats["cache_hit_rate"] = 0

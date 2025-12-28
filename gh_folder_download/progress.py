@@ -2,6 +2,7 @@
 Advanced progress tracking for gh-folder-download using Rich Progress.
 """
 
+import contextlib
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -151,9 +152,7 @@ class ProgressTracker:
 
         if not self.quiet:
             # Create summary table
-            summary_table = Table(
-                title="Download Session", show_header=True, header_style="bold cyan"
-            )
+            summary_table = Table(title="Download Session", show_header=True, header_style="bold cyan")
             summary_table.add_column("Metric", style="bold")
             summary_table.add_column("Value", justify="right")
 
@@ -161,11 +160,7 @@ class ProgressTracker:
             summary_table.add_row("Total Size", self.stats.format_bytes(total_bytes))
             summary_table.add_row("Started", time.strftime("%H:%M:%S"))
 
-            self.console.print(
-                Panel(
-                    summary_table, title="📊 Download Information", border_style="cyan"
-                )
-            )
+            self.console.print(Panel(summary_table, title="📊 Download Information", border_style="cyan"))
 
             # Start progress display
             self.progress.start()
@@ -231,11 +226,8 @@ class ProgressTracker:
         # Remove completed task
         if not self.quiet and file_path in self.file_tasks:
             task_id = self.file_tasks[file_path]
-            try:
+            with contextlib.suppress(IndexError, KeyError):
                 self.progress.remove_task(task_id)
-            except (IndexError, KeyError):
-                # Handle case where task was already removed
-                pass
             del self.file_tasks[file_path]
 
         self._update_overall_progress()
@@ -258,9 +250,7 @@ class ProgressTracker:
 
             # Show final summary
             summary = self._create_final_summary()
-            self.console.print(
-                Panel(summary, title="✅ Download Complete", border_style="green")
-            )
+            self.console.print(Panel(summary, title="✅ Download Complete", border_style="green"))
 
     def _create_final_summary(self) -> Table:
         """Create final download summary."""
@@ -279,18 +269,13 @@ class ProgressTracker:
         summary_table.add_row("", "")  # Separator
 
         # Size and performance
-        summary_table.add_row(
-            "Total Downloaded", self.stats.format_bytes(self.stats.downloaded_bytes)
-        )
+        summary_table.add_row("Total Downloaded", self.stats.format_bytes(self.stats.downloaded_bytes))
         summary_table.add_row("Total Time", f"{self.stats.elapsed_time:.1f}s")
         summary_table.add_row("Average Speed", self.stats.format_speed())
 
         # Success rate
         if self.stats.total_files > 0:
-            success_rate = (
-                (self.stats.completed_files - self.stats.failed_files)
-                / self.stats.total_files
-            ) * 100
+            success_rate = ((self.stats.completed_files - self.stats.failed_files) / self.stats.total_files) * 100
             summary_table.add_row("Success Rate", f"{success_rate:.1f}%")
 
         # Cache hit rate
@@ -330,9 +315,7 @@ class SimpleProgressTracker:
         self.stats.total_bytes = total_bytes
         self.stats.start_time = time.time()
 
-        self.logger.info(
-            f"Starting download of {total_files} files ({self.stats.format_bytes(total_bytes)})"
-        )
+        self.logger.info(f"Starting download of {total_files} files ({self.stats.format_bytes(total_bytes)})")
 
     def add_file_task(self, file_path: str, size: int):
         """Add a file download task (no-op for simple tracker)."""
