@@ -30,12 +30,21 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=9.0.2", "pytest-asyncio>=1.3.0", "ruff>=0.14.10", "ty>=0.0.7"]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.14.10",
+    "ty>=0.0.7",
+]
 
 [tool.pytest.ini_options]
 minversion = "6.0"
 addopts = "-ra -q --asyncio-mode=auto"
 testpaths = ["tests"]
+markers = [
+    "integration: marks tests as integration tests (require internet, may be slow)",
+]
 
 [project.urls]
 homepage = "https://github.com/leynier/gh-folder-download"

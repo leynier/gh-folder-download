@@ -132,3 +132,6 @@ dmypy.json
 
 .vscode/**
 requirements_temp.txt
+
+# Integration test downloads
+tests/downloads/

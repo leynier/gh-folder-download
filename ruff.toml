@@ -5,6 +5,7 @@ exclude = [
     "__pycache__",
     "build",
     "dist",
+    "tests/downloads",
 ]
 line-length = 120
 target-version = "py312"
