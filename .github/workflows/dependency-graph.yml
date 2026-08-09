@@ -1,0 +1,97 @@
+name: Dependency Graph
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - pyproject.toml
+      - uv.lock
+      - .github/workflows/dependency-graph.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  submit:
+    name: Submit uv dependency graph
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Generate and submit dependency snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          jq -s \
+            --arg sha "$GITHUB_SHA" \
+            --arg ref "$GITHUB_REF" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            '
+              .[0] as $all
+              | .[1] as $runtime
+              | ($all.metadata.component."bom-ref") as $root
+              | ($all.components | map({key: ."bom-ref", value: .name}) | from_entries) as $names
+              | ($all.dependencies | map({key: .ref, value: (.dependsOn // [])}) | from_entries) as $deps
+              | ($deps[$root] // []) as $direct
+              | ($runtime.components | map(."bom-ref")) as $runtime_refs
+              | {
+                  version: 0,
+                  sha: $sha,
+                  ref: $ref,
+                  job: {
+                    correlator: "uv-lock-dependency-graph",
+                    id: $run_id
+                  },
+                  detector: {
+                    name: "uv-cyclonedx-export",
+                    version: $all.metadata.tools[0].version,
+                    url: "https://github.com/astral-sh/uv"
+                  },
+                  scanned: $all.metadata.timestamp,
+                  manifests: {
+                    "uv.lock": {
+                      name: "uv.lock",
+                      file: {source_location: "uv.lock"},
+                      resolved: (
+                        $all.components
+                        | map(
+                            . as $component
+                            | $component."bom-ref" as $component_ref
+                            | {
+                                key: $component.name,
+                                value: {
+                                  package_url: $component.purl,
+                                  relationship: (
+                                    if ($direct | index($component_ref))
+                                    then "direct"
+                                    else "indirect"
+                                    end
+                                  ),
+                                  scope: (
+                                    if ($runtime_refs | index($component_ref))
+                                    then "runtime"
+                                    else "development"
+                                    end
+                                  ),
+                                  dependencies: [
+                                    ($deps[$component_ref] // [])[]
+                                    | $names[.]
+                                  ]
+                                }
+                              }
+                          )
+                        | from_entries
+                      )
+                    }
+                  }
+                }
+            ' \
+            <(uv export --locked --all-groups --format cyclonedx1.5 --preview-features sbom-export) \
+            <(uv export --locked --no-dev --format cyclonedx1.5 --preview-features sbom-export) \
+            | gh api \
+                --method POST \
+                repos/${{ github.repository }}/dependency-graph/snapshots \
+                --input -
