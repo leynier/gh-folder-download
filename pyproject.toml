@@ -21,10 +21,10 @@ requires-python = ">=3.13"
 
 dependencies = [
     "aiohttp>=3.13.2",
+    "pathspec>=0.12.1",
     "pydantic>=2.12.5",
     "pygithub>=2.8.1",
     "pyyaml>=6.0.3",
-    "requests>=2.32.5",
     "rich>=14.2.0",
     "typer>=0.21.0",
 ]
@@ -40,7 +40,7 @@ dev = [
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "-ra -q --asyncio-mode=auto"
+addopts = "-ra -q --asyncio-mode=auto --ignore=tests/downloads -m 'not integration' --cov=gh_folder_download --cov-report=term-missing --cov-fail-under=100"
 testpaths = ["tests"]
 markers = [
     "integration: marks tests as integration tests (require internet, may be slow)",

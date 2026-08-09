@@ -140,6 +140,33 @@ class FileIntegrityChecker:
         self.logger.debug(f"{algorithm.upper()} checksum verified successfully")
         return True
 
+    def verify_git_blob_sha(self, file_path: Path, expected_sha: str) -> bool:
+        """Verify a file against the blob object id returned by GitHub.
+
+        Git hashes blobs as ``<algorithm>(b"blob <size>\\0" + content)`` rather
+        than hashing the raw content alone. GitHub currently exposes 40-character
+        SHA-1 object ids and may expose 64-character SHA-256 ids for repositories
+        using the newer object format.
+        """
+        algorithm = {40: "sha1", 64: "sha256"}.get(len(expected_sha))
+        if algorithm is None or any(char not in "0123456789abcdefABCDEF" for char in expected_sha):
+            raise IntegrityError(f"Unsupported Git blob SHA: {expected_sha}")
+
+        try:
+            size = file_path.stat().st_size
+            hasher = hashlib.new(algorithm)
+            hasher.update(f"blob {size}\0".encode())
+            with open(file_path, "rb") as file:
+                while chunk := file.read(8192):
+                    hasher.update(chunk)
+        except OSError as e:
+            raise IntegrityError(f"Failed to calculate Git blob SHA for {file_path}: {e}") from e
+
+        actual_sha = hasher.hexdigest()
+        if actual_sha.lower() != expected_sha.lower():
+            raise IntegrityError(f"Git blob SHA mismatch for {file_path}: expected {expected_sha}, got {actual_sha}")
+        return True
+
     def verify_file_content(self, file_path: Path) -> dict[str, Any]:
         """
         Perform basic content verification checks.

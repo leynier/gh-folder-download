@@ -4,6 +4,7 @@ import time
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
+from github import GithubException
 
 from gh_folder_download.rate_limiter import (
     GitHubRateLimiter,
@@ -161,6 +162,107 @@ class TestGitHubRateLimiter:
 
         assert result > 0
 
+    @pytest.mark.parametrize(
+        "error",
+        [GithubException(500, "server"), RuntimeError("unexpected")],
+    )
+    def test_update_rate_limit_errors_are_tolerated(self, error):
+        client = Mock()
+        client.get_rate_limit.side_effect = error
+
+        limiter = GitHubRateLimiter(client)
+
+        assert limiter._core_rate_limit is None
+
+    def test_should_update_for_missing_stale_and_fresh_data(self, mock_github_client, monkeypatch):
+        limiter = GitHubRateLimiter(mock_github_client)
+        monkeypatch.setattr("gh_folder_download.rate_limiter.time.time", lambda: 100)
+        limiter._core_rate_limit = None
+        assert limiter._should_update_rate_limit() is True
+        limiter._core_rate_limit = RateLimitInfo(1, 1, 200, 0)
+        limiter._last_update = 0
+        assert limiter._should_update_rate_limit() is True
+        limiter._last_update = 90
+        assert limiter._should_update_rate_limit() is False
+
+    def test_wait_refreshes_stale_data(self, mock_github_client, monkeypatch):
+        limiter = GitHubRateLimiter(mock_github_client)
+        update = Mock()
+        monkeypatch.setattr(limiter, "_should_update_rate_limit", lambda: True)
+        monkeypatch.setattr(limiter, "_update_rate_limit_info", update)
+
+        limiter.wait_if_needed()
+
+        update.assert_called_once()
+
+    def test_status_refreshes_stale_data(self, mock_github_client, monkeypatch):
+        limiter = GitHubRateLimiter(mock_github_client)
+        update = Mock()
+        monkeypatch.setattr(limiter, "_should_update_rate_limit", lambda: True)
+        monkeypatch.setattr(limiter, "_update_rate_limit_info", update)
+
+        limiter.get_rate_limit_status()
+
+        update.assert_called_once()
+
+    def test_missing_rate_data_uses_fallback_delay(self, mock_github_client, monkeypatch):
+        limiter = GitHubRateLimiter(mock_github_client)
+        limiter._core_rate_limit = None
+        monkeypatch.setattr(limiter, "_should_update_rate_limit", lambda: False)
+        sleep = Mock()
+        monkeypatch.setattr("gh_folder_download.rate_limiter.time.sleep", sleep)
+
+        limiter.wait_if_needed()
+
+        sleep.assert_called_once_with(limiter._base_delay)
+
+    def test_waits_until_reset_when_exhausted(self, mock_github_client, monkeypatch):
+        limiter = GitHubRateLimiter(mock_github_client)
+        limiter._core_rate_limit = RateLimitInfo(100, 0, int(time.time()) + 5, 100)
+        monkeypatch.setattr(limiter, "_should_update_rate_limit", lambda: False)
+        update = Mock()
+        monkeypatch.setattr(limiter, "_update_rate_limit_info", update)
+        sleep = Mock()
+        monkeypatch.setattr("gh_folder_download.rate_limiter.time.sleep", sleep)
+
+        limiter.wait_if_needed()
+
+        assert sleep.call_args.args[0] > 0
+        update.assert_called_once()
+
+    def test_buffer_warning_delay_and_local_accounting(self, mock_github_client, monkeypatch):
+        limiter = GitHubRateLimiter(mock_github_client, buffer_requests=100)
+        limiter._core_rate_limit = RateLimitInfo(100, 5, int(time.time()) + 100, 95)
+        limiter._last_request_time = time.time()
+        monkeypatch.setattr(limiter, "_should_update_rate_limit", lambda: False)
+        sleep = Mock()
+        monkeypatch.setattr("gh_folder_download.rate_limiter.time.sleep", sleep)
+
+        limiter.wait_if_needed()
+
+        assert limiter._core_rate_limit.remaining == 4
+        assert limiter._core_rate_limit.used == 96
+        sleep.assert_called_once()
+
+    def test_empty_status_and_none_rate_limit_checks(self, mock_github_client, monkeypatch):
+        limiter = GitHubRateLimiter(mock_github_client)
+        limiter._core_rate_limit = None
+        limiter._search_rate_limit = None
+        monkeypatch.setattr(limiter, "_should_update_rate_limit", lambda: False)
+
+        assert limiter.get_rate_limit_status() == {}
+        assert limiter.is_rate_limited() is False
+        monkeypatch.setattr(limiter, "is_rate_limited", lambda _operation: True)
+        assert limiter.get_wait_time() == 0
+
+    def test_log_rate_limit_status(self, mock_github_client):
+        limiter = GitHubRateLimiter(mock_github_client)
+        limiter.logger = Mock()
+
+        limiter.log_rate_limit_status()
+
+        assert limiter.logger.info.call_count == 2
+
 
 class TestCalculateAdaptiveDelay:
     """Tests for adaptive delay calculation."""
@@ -215,6 +317,33 @@ class TestCalculateAdaptiveDelay:
         # Should wait until reset plus buffer
         assert delay >= 60
 
+    def test_default_buffer_does_not_throttle_every_anonymous_request(self, mock_github_client):
+        limiter = GitHubRateLimiter(mock_github_client, buffer_requests=100)
+        anonymous_limit = RateLimitInfo(
+            limit=60,
+            remaining=50,
+            reset_time=int(time.time()) + 3600,
+            used=10,
+        )
+
+        assert limiter._effective_buffer(anonymous_limit) == 3
+        assert limiter._calculate_adaptive_delay(anonymous_limit) == 0
+
+    def test_expired_reset_uses_base_delay(self, mock_github_client):
+        limiter = GitHubRateLimiter(mock_github_client)
+        info = RateLimitInfo(100, 50, int(time.time()) - 1, 50)
+        assert limiter._calculate_adaptive_delay(info) == limiter._base_delay
+
+    def test_buffer_zone_caps_delay(self, mock_github_client):
+        limiter = GitHubRateLimiter(mock_github_client, buffer_requests=100)
+        info = RateLimitInfo(100, 1, int(time.time()) + 1000, 99)
+        assert limiter._calculate_adaptive_delay(info) == 60
+
+    def test_medium_usage_applies_factor(self, mock_github_client):
+        limiter = GitHubRateLimiter(mock_github_client)
+        info = RateLimitInfo(100, 30, int(time.time()) + 100, 70)
+        assert limiter._calculate_adaptive_delay(info) > 0
+
 
 class TestRateLimitedGitHubClient:
     """Tests for RateLimitedGitHubClient wrapper."""
@@ -224,8 +353,14 @@ class TestRateLimitedGitHubClient:
         """Test client initializes correctly."""
         client = RateLimitedGitHubClient(token="test_token")
 
-        mock_github_class.assert_called_once_with("test_token")
+        mock_github_class.assert_called_once()
+        assert mock_github_class.call_args.kwargs["auth"]._token == "test_token"
         assert client.rate_limiter is not None
+
+    @patch("gh_folder_download.rate_limiter.Github")
+    def test_anonymous_initialization(self, mock_github_class):
+        RateLimitedGitHubClient()
+        mock_github_class.assert_called_once_with()
 
     @patch("gh_folder_download.rate_limiter.Github")
     def test_make_api_call_success(self, mock_github_class):
@@ -269,3 +404,50 @@ class TestRateLimitedGitHubClient:
         status = client.get_rate_limit_status()
 
         assert "core" in status
+
+    @patch("gh_folder_download.rate_limiter.Github")
+    def test_rate_limit_exception_waits_and_retries(self, mock_github_class, monkeypatch):
+        mock_github_class.return_value.get_rate_limit.return_value = mock_github_client = MagicMock()
+        mock_github_client.core.limit = 1
+        mock_github_client.core.remaining = 1
+        mock_github_client.core.reset.timestamp.return_value = time.time() + 1
+        mock_github_client.search.limit = 1
+        mock_github_client.search.remaining = 1
+        mock_github_client.search.reset.timestamp.return_value = time.time() + 1
+        client = RateLimitedGitHubClient()
+        monkeypatch.setattr(client.rate_limiter, "wait_if_needed", Mock())
+        monkeypatch.setattr(client.rate_limiter, "_update_rate_limit_info", Mock())
+        monkeypatch.setattr(client.rate_limiter, "get_wait_time", Mock(return_value=2))
+        monkeypatch.setattr("gh_folder_download.rate_limiter.time.sleep", Mock())
+        func = Mock(side_effect=[GithubException(403, "rate limit exceeded"), "ok"])
+
+        assert client.make_api_call(func) == "ok"
+        assert func.call_count == 2
+
+    @patch("gh_folder_download.rate_limiter.Github")
+    @pytest.mark.parametrize(
+        "error",
+        [GithubException(403, "rate limit exceeded"), GithubException(404, "missing")],
+    )
+    def test_api_errors_without_wait_are_raised(self, mock_github_class, error, monkeypatch):
+        mock_github_class.return_value.get_rate_limit.side_effect = RuntimeError("no status")
+        client = RateLimitedGitHubClient()
+        monkeypatch.setattr(client.rate_limiter, "wait_if_needed", Mock())
+        monkeypatch.setattr(client.rate_limiter, "get_wait_time", Mock(return_value=0))
+
+        with pytest.raises(GithubException):
+            client.make_api_call(Mock(side_effect=error))
+
+    @patch("gh_folder_download.rate_limiter.Github")
+    def test_get_repo_and_log_delegate(self, mock_github_class, monkeypatch):
+        mock_github_class.return_value.get_rate_limit.side_effect = RuntimeError("no status")
+        client = RateLimitedGitHubClient()
+        make_api_call = Mock(return_value="repo")
+        log_status = Mock()
+        monkeypatch.setattr(client, "make_api_call", make_api_call)
+        monkeypatch.setattr(client.rate_limiter, "log_rate_limit_status", log_status)
+
+        assert client.get_repo("owner/repo") == "repo"
+        log_status.assert_not_called()
+        client.log_rate_limit_status()
+        log_status.assert_called_once()

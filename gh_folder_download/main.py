@@ -1,504 +1,298 @@
+"""Typer command-line interface for gh-folder-download."""
+
+from __future__ import annotations
+
 import os
+import re
 from pathlib import Path
 from time import time
 
 import typer
-from github import Github, GithubException
+from github import Auth, Github, GithubException
+from pydantic import ValidationError as PydanticValidationError
 from typer import Option, Typer
 
 from .cache import DownloadCache
-from .config import create_sample_config, load_config
+from .config import ConfigurationError, FilterConfig, create_sample_config, load_config
 from .core import (
-    download_folder,
+    DownloadOperationError,
     download_folder_parallel,
-    download_folder_parallel_no_rate_limit,
     get_sha_for_branch_or_tag,
+    resolve_ref_and_path,
 )
 from .filters import create_file_filter, get_preset_filter
-from .integrity import FileIntegrityChecker
 from .logger import setup_logger
 from .rate_limiter import RateLimitedGitHubClient
-from .retry import APIRetryHandler, DownloadRetryHandler, RetryConfig, RetryError
+from .retry import APIRetryHandler, RetryConfig, RetryError
 from .validation import InputValidator, ValidationError
 
-app = Typer()
+app = Typer(no_args_is_help=False)
 
 
 @app.command()
 def download_command(
-    url: str | None = Option(None, help="Repository URL"),
-    output: Path = Option(
-        ".",
-        help="Output folder",
-        file_okay=False,
-        writable=True,
-    ),
+    url: str | None = Option(None, help="Repository or folder URL"),
+    output: Path | None = Option(None, help="Parent output directory", file_okay=False),
     token: str | None = Option(None, help="GitHub token"),
-    force: bool = Option(False, help="Remove existing output folder if it exists"),
+    ref: str | None = Option(None, help="Explicit branch, tag, or commit; supports slashes"),
+    remote_path: str | None = Option(None, "--path", help="Explicit repository folder path"),
+    force: bool = Option(False, help="Replace the calculated destination if it exists"),
     verbose: bool = Option(False, "--verbose", "-v", help="Enable verbose logging"),
-    quiet: bool = Option(False, "--quiet", "-q", help="Suppress output except errors"),
+    quiet: bool | None = Option(None, "--quiet/--no-quiet", "-q", help="Suppress output except errors"),
     log_file: Path | None = Option(None, help="Log to file"),
-    verify_integrity: bool = Option(True, help="Verify file integrity after download"),
-    max_retries: int = Option(
-        3,
-        help="Maximum number of retry attempts for failed operations",
-        min=1,
-        max=10,
+    verify_integrity: bool | None = Option(
+        None, "--verify-integrity/--no-verify-integrity", help="Verify size and Git blob SHA"
     ),
-    retry_delay: float = Option(
-        1.0,
-        help="Base delay between retries in seconds",
-        min=0.1,
-        max=30.0,
+    max_retries: int | None = Option(None, min=1, max=10, help="Maximum download/API attempts"),
+    retry_delay: float | None = Option(None, min=0.1, max=30.0, help="Base retry delay in seconds"),
+    parallel_downloads: bool | None = Option(
+        None, "--parallel-downloads/--no-parallel-downloads", help="Enable concurrent downloads"
     ),
-    # New performance options
-    parallel_downloads: bool = Option(
-        True,
-        help="Enable parallel downloads for better performance",
+    max_concurrent: int | None = Option(None, min=1, max=20, help="Maximum concurrent downloads"),
+    use_cache: bool | None = Option(None, "--use-cache/--no-use-cache", help="Use the content cache"),
+    clear_cache: bool = Option(False, help="Clear the content cache"),
+    cache_stats: bool = Option(False, help="Show content cache statistics"),
+    rate_limit_buffer: int | None = Option(None, min=10, max=1000, help="Reserved GitHub API requests"),
+    disable_rate_limiting: bool | None = Option(
+        None, "--disable-rate-limiting/--enable-rate-limiting", help="Disable API throttling"
     ),
-    max_concurrent: int = Option(
-        5,
-        help="Maximum number of concurrent downloads",
-        min=1,
-        max=20,
+    show_progress: bool | None = Option(None, "--show-progress/--no-show-progress", help="Show progress bars"),
+    config_file: Path | None = Option(None, exists=True, readable=True, help="Configuration file"),
+    create_config: bool = Option(False, help="Create a sample configuration file and exit"),
+    include_extensions: list[str] | None = Option(None, help="Include only these extensions"),
+    exclude_extensions: list[str] | None = Option(None, help="Exclude these extensions"),
+    include_patterns: list[str] | None = Option(None, help="Include matching repository-relative globs"),
+    exclude_patterns: list[str] | None = Option(None, help="Exclude matching repository-relative globs"),
+    min_size: str | None = Option(None, help="Minimum file size, for example 1KB"),
+    max_size: str | None = Option(None, help="Maximum file size, for example 10MB"),
+    exclude_binary: bool | None = Option(None, "--exclude-binary/--include-binary", help="Exclude binary files"),
+    exclude_large_files: bool | None = Option(
+        None, "--exclude-large-files/--include-large-files", help="Exclude files larger than 10MB"
     ),
-    use_cache: bool = Option(
-        True,
-        help="Enable intelligent caching to avoid re-downloading unchanged files",
+    respect_gitignore: bool | None = Option(
+        None, "--respect-gitignore/--ignore-gitignore", help="Respect repository .gitignore rules"
     ),
-    clear_cache: bool = Option(
-        False,
-        help="Clear download cache before starting",
-    ),
-    cache_stats: bool = Option(
-        False,
-        help="Show cache statistics",
-    ),
-    rate_limit_buffer: int = Option(
-        100,
-        help="Number of GitHub API requests to keep as buffer",
-        min=10,
-        max=1000,
-    ),
-    disable_rate_limiting: bool = Option(
-        False,
-        help="Disable rate limiting completely for maximum speed (may exhaust API limits)",
-    ),
-    show_progress: bool = Option(
-        True,
-        help="Show advanced progress bars and real-time statistics",
-    ),
-    # Configuration options
-    config_file: Path | None = Option(
-        None,
-        help="Path to configuration file",
-        exists=True,
-        readable=True,
-    ),
-    create_config: bool = Option(
-        False,
-        help="Create a sample configuration file and exit",
-    ),
-    # Filter options
-    include_extensions: list[str] | None = Option(
-        None,
-        help="Include only files with these extensions (e.g., --include-extensions .py .js)",
-    ),
-    exclude_extensions: list[str] | None = Option(
-        None,
-        help="Exclude files with these extensions (e.g., --exclude-extensions .log .tmp)",
-    ),
-    include_patterns: list[str] | None = Option(
-        None,
-        help="Include files matching glob patterns (e.g. 'src/**')",
-    ),
-    exclude_patterns: list[str] | None = Option(
-        None,
-        help="Exclude files matching glob patterns (e.g. '**/*.pyc')",
-    ),
-    min_size: str | None = Option(
-        None,
-        help="Minimum file size (e.g., --min-size 1KB, 1MB)",
-    ),
-    max_size: str | None = Option(
-        None,
-        help="Maximum file size (e.g., --max-size 10MB, 100KB)",
-    ),
-    exclude_binary: bool = Option(
-        False,
-        help="Exclude binary files",
-    ),
-    exclude_large_files: bool = Option(
-        False,
-        help="Exclude files larger than 10MB",
-    ),
-    respect_gitignore: bool = Option(
-        False,
-        help="Respect common .gitignore patterns",
-    ),
-    filter_preset: str | None = Option(
-        None,
-        help="Use a predefined filter preset (code-only, docs-only, config-only...)",
-    ),
+    filter_preset: str | None = Option(None, help="Filter preset"),
 ) -> None:
-    # Handle config creation request
     if create_config:
         if create_sample_config():
-            logger = setup_logger()
-            logger.info("Sample configuration file created successfully")
             return
-        else:
-            logger = setup_logger()
-            logger.error("Failed to create sample configuration file")
-            raise typer.Exit(1)
-
-    # Load configuration
-    config = load_config(config_file)
-
-    # Setup logging with config defaults
-    if quiet:
-        log_level = "ERROR"
-    elif verbose:
-        log_level = "DEBUG"
-    else:
-        log_level = config.ui.verbosity
-
-    logger = setup_logger(level=log_level, log_file=log_file, quiet=quiet or config.ui.quiet_mode)
-
-    # Parse size filters
-    min_size_bytes = None
-    max_size_bytes = None
-
-    if min_size:
-        min_size_bytes = _parse_size_string(min_size)
-        if min_size_bytes is None:
-            logger.error(f"Invalid min-size format: {min_size}")
-            raise typer.Exit(1)
-
-    if max_size:
-        max_size_bytes = _parse_size_string(max_size)
-        if max_size_bytes is None:
-            logger.error(f"Invalid max-size format: {max_size}")
-            raise typer.Exit(1)
-
-    # Setup file filters
-    filter_config = config.filters.model_copy()
-
-    # Override config with CLI options if provided
-    if include_extensions:
-        filter_config.include_extensions = include_extensions
-    if exclude_extensions:
-        filter_config.exclude_extensions = exclude_extensions
-    if include_patterns:
-        filter_config.include_patterns = include_patterns
-    if exclude_patterns:
-        filter_config.exclude_patterns = exclude_patterns
-    if min_size_bytes is not None:
-        filter_config.min_size_bytes = min_size_bytes
-    if max_size_bytes is not None:
-        filter_config.max_size_bytes = max_size_bytes
-    if exclude_binary:
-        filter_config.exclude_binary = True
-    if exclude_large_files:
-        filter_config.exclude_large_files = True
-    if respect_gitignore:
-        filter_config.respect_gitignore = True
-
-    # Apply filter preset if specified
-    if filter_preset:
-        try:
-            preset_config = get_preset_filter(filter_preset)
-            # Merge preset with CLI overrides
-            if not include_extensions:
-                filter_config.include_extensions = preset_config.include_extensions
-            if not exclude_extensions:
-                filter_config.exclude_extensions = preset_config.exclude_extensions
-            if not include_patterns:
-                filter_config.include_patterns = preset_config.include_patterns
-            if not exclude_patterns:
-                filter_config.exclude_patterns = preset_config.exclude_patterns
-            if min_size_bytes is None and preset_config.min_size_bytes:
-                filter_config.min_size_bytes = preset_config.min_size_bytes
-            if max_size_bytes is None and preset_config.max_size_bytes:
-                filter_config.max_size_bytes = preset_config.max_size_bytes
-            if not exclude_binary:
-                filter_config.exclude_binary = preset_config.exclude_binary
-            if not exclude_large_files:
-                filter_config.exclude_large_files = preset_config.exclude_large_files
-            if not respect_gitignore:
-                filter_config.respect_gitignore = preset_config.respect_gitignore
-        except ValueError as e:
-            logger.error(str(e))
-            raise typer.Exit(1) from e
-
-    # Create file filter
-    file_filter = create_file_filter(filter_config)
-
-    # Log filter summary if verbose
-    if verbose:
-        filter_summary = file_filter.get_filter_summary()
-        logger.info("Active file filters:")
-        for key, value in filter_summary.items():
-            if value:
-                logger.info(f"  {key}: {value}")
-
-    # Validate URL is provided when not creating config
-    if not url:
-        logger.error("Repository URL is required")
         raise typer.Exit(1)
 
-    # Initialize components with custom retry configuration
+    try:
+        config = load_config(config_file)
+    except ConfigurationError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(2) from error
+
     validator = InputValidator()
+    try:
+        validated_log_file = validator.validate_log_file_path(log_file)
+    except ValidationError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(2) from error
 
-    # Create custom retry configs based on CLI parameters
-    api_retry_config = RetryConfig(
-        max_attempts=max_retries,
-        base_delay=retry_delay,
-        max_delay=30.0,
-        backoff_factor=2.0,
+    effective_quiet = config.ui.quiet_mode if quiet is None else quiet
+    log_level = "DEBUG" if verbose else ("ERROR" if effective_quiet else config.ui.verbosity)
+    logger = setup_logger(
+        level=log_level,
+        log_file=validated_log_file,
+        quiet=effective_quiet,
+        use_colors=config.ui.use_colors,
     )
 
-    download_retry_config = RetryConfig(
-        max_attempts=max_retries + 2,  # More attempts for downloads
-        base_delay=retry_delay,
-        max_delay=120.0,
-        backoff_factor=2.0,
-    )
+    effective_cache = config.cache.enabled if use_cache is None else use_cache
+    if clear_cache or cache_stats:
+        cache = DownloadCache(
+            max_size_gb=config.cache.max_size_gb,
+            max_age_days=config.cache.max_age_days,
+            auto_cleanup=config.cache.auto_cleanup,
+        )
+        if clear_cache:
+            cache.clear_cache()
+        if cache_stats:
+            stats = cache.get_cache_stats()
+            logger.info(f"Cache: {stats['total_entries']} entries, {stats['total_size_mb']} MB")
+    if not url and (clear_cache or cache_stats):
+        return
+    if not url:
+        logger.error("Repository URL is required")
+        raise typer.Exit(2)
 
-    api_retry_handler = APIRetryHandler(api_retry_config)
-    download_retry_handler = DownloadRetryHandler(download_retry_config)
-    integrity_checker = FileIntegrityChecker()
-
-    # Initialize cache
-    cache = DownloadCache() if use_cache else None
-    if clear_cache and cache:
-        cache.clear_cache()
-        logger.info("Cache cleared")
-
-    # Show cache stats if requested
-    if cache_stats and cache:
-        stats = cache.get_cache_stats()
-        if stats["total_entries"] > 0:
-            logger.info(
-                f"Cache stats: {stats['total_entries']} entries, "
-                f"{stats['total_size_mb']} MB, "
-                f"oldest: {stats['oldest_entry']}, "
-                f"newest: {stats['newest_entry']}"
-            )
-        else:
-            logger.info("Cache is empty")
+    effective_output = output or Path(config.paths.default_output)
+    effective_token = token if token is not None else config.github_token or os.getenv("GITHUB_TOKEN")
+    effective_integrity = config.download.verify_integrity if verify_integrity is None else verify_integrity
+    effective_retries = config.download.max_retries if max_retries is None else max_retries
+    effective_retry_delay = config.download.retry_delay if retry_delay is None else retry_delay
+    effective_parallel = config.download.parallel_downloads if parallel_downloads is None else parallel_downloads
+    effective_concurrent = config.download.max_concurrent if max_concurrent is None else max_concurrent
+    effective_progress = config.ui.show_progress if show_progress is None else show_progress
+    effective_rate_buffer = config.rate_limit.buffer if rate_limit_buffer is None else rate_limit_buffer
+    rate_limiting_disabled = not config.rate_limit.enabled if disable_rate_limiting is None else disable_rate_limiting
 
     try:
-        # Enhanced input validation
-        logger.progress_info("Validating inputs...")
+        parsed_url = validator.parse_github_url(url)
+        effective_output = validator.validate_output_path(effective_output, create_if_missing=True)
+        effective_token = validator.validate_github_token(effective_token)
+        filter_config = _resolve_filter_config(
+            config.filters,
+            filter_preset=filter_preset,
+            include_extensions=include_extensions,
+            exclude_extensions=exclude_extensions,
+            include_patterns=include_patterns,
+            exclude_patterns=exclude_patterns,
+            min_size=min_size,
+            max_size=max_size,
+            exclude_binary=exclude_binary,
+            exclude_large_files=exclude_large_files,
+            respect_gitignore=respect_gitignore,
+        )
+        file_filter = create_file_filter(filter_config)
 
-        # Validate GitHub URL
-        org, repo, branch, path = validator.validate_github_url(url)
+        api_retry = APIRetryHandler(
+            RetryConfig(
+                max_attempts=effective_retries,
+                base_delay=effective_retry_delay,
+                max_delay=30.0,
+                backoff_factor=2.0,
+            )
+        )
 
-        # Validate output path
-        output = validator.validate_output_path(output, create_if_missing=True)
-
-        # Validate GitHub token
-        token = validator.validate_github_token(token)
-
-        # Validate log file path
-        if log_file:
-            log_file = validator.validate_log_file_path(log_file)
-
-        # Get GitHub token from environment if not provided
-        if not token:
-            token = os.getenv("GITHUB_TOKEN")
-            if token:
-                logger.debug("Using GitHub token from GITHUB_TOKEN environment variable")
-                token = validator.validate_github_token(token)
-
-        logger.debug("✅ All inputs validated successfully")
-
-        # Setup GitHub client with or without rate limiting
-        logger.progress_info("Connecting to GitHub API...")
-
-        if disable_rate_limiting:
-            logger.warning("Rate limiting disabled - API limits may be exhausted")
-            github = Github(token)
-            github_client = None  # Signal that we're using direct client
-
-            # Get repository directly
-            repository = github.get_repo(f"{org}/{repo}")
-
+        if rate_limiting_disabled:
+            github = Github(auth=Auth.Token(effective_token)) if effective_token else Github()
+            github_client = None
+            repository = api_retry.retry_api_call(
+                lambda: github.get_repo(f"{parsed_url.owner}/{parsed_url.repository}"), "get repository"
+            )
         else:
-            github_client = RateLimitedGitHubClient(token, rate_limit_buffer)
-
-            # Log rate limit status
-            if verbose:
-                github_client.log_rate_limit_status()
-
-            # Get repository with rate limiting
-            repository = github_client.get_repo(f"{org}/{repo}")
-            github = github_client.github  # For compatibility
-
-        if not branch:
-            branch = repository.default_branch
-
-        # Display repository information
-        logger.repository_info(org, repo, branch, path)
-
-        # Get SHA for branch/tag with retry
-        logger.progress_info(f"Getting commit SHA for branch '{branch}'")
-
-        def get_branch_sha():
-            return get_sha_for_branch_or_tag(repository, branch)
-
-        sha = api_retry_handler.retry_api_call(get_branch_sha, f"get SHA for branch {branch}")
-        logger.debug(f"Found SHA: {sha}")
-
-        # Start download
-        start_time = time()
-
-        if parallel_downloads:
-            # Use parallel downloader
-            if disable_rate_limiting:
-                # Use direct GitHub client without rate limiting
-                stats = download_folder_parallel_no_rate_limit(
-                    repository=repository,
-                    sha=sha,
-                    path=path,
-                    output=output,
-                    force=force,
-                    max_concurrent=max_concurrent,
-                    verify_integrity=verify_integrity,
-                    use_cache=use_cache,
-                    github=github,
-                    api_retry_handler=api_retry_handler,
-                    quiet=quiet,
-                    show_progress=show_progress,
-                )
-            else:
-                # Use rate-limited client
-                if github_client is None:
-                    logger.error("Rate-limited client not properly initialized")
-                    raise typer.Exit(1)
-                stats = download_folder_parallel(
-                    repository=repository,
-                    sha=sha,
-                    path=path,
-                    output=output,
-                    force=force,
-                    max_concurrent=max_concurrent,
-                    verify_integrity=verify_integrity,
-                    use_cache=use_cache,
-                    github_client=github_client,
-                    api_retry_handler=api_retry_handler,
-                    quiet=quiet,
-                    show_progress=show_progress,
-                )
-        else:
-            # Use sequential downloader (legacy)
-            stats = download_folder(
-                repository=repository,
-                sha=sha,
-                path=path,
-                output=output,
-                force=force,
-                verify_integrity=verify_integrity,
-                api_retry_handler=api_retry_handler,
-                download_retry_handler=download_retry_handler,
-                integrity_checker=integrity_checker,
+            github_client = RateLimitedGitHubClient(effective_token, effective_rate_buffer)
+            repository = api_retry.retry_api_call(
+                lambda: github_client.get_repo(f"{parsed_url.owner}/{parsed_url.repository}"), "get repository"
             )
 
-        end_time = time()
+        resolved_ref, sha, path = _resolve_ref_path(
+            repository,
+            parsed_url.tree_segments,
+            explicit_ref=ref,
+            explicit_path=remote_path,
+            retry_handler=api_retry,
+        )
+        path = validator.validate_repository_path(path)
+        logger.repository_info(parsed_url.owner, parsed_url.repository, resolved_ref, path)
 
-        # Show summary
-        if stats["total_files"] > 0:
-            logger.summary(
-                total_files=stats["total_files"],
-                total_size=stats["total_size"],
-                duration=end_time - start_time,
-            )
-
-            # Show integrity results if verification was enabled
-            if verify_integrity and stats.get("integrity_failures", 0) > 0:
-                logger.warning(f"{stats['integrity_failures']} files failed integrity verification")
-            elif verify_integrity:
-                logger.success("All files passed integrity verification")
-
-            # Show cache stats for parallel downloads
-            if parallel_downloads and stats.get("cached_files", 0) > 0:
-                logger.info(f"Cache hits: {stats['cached_files']} files")
-
-            # Show performance stats
-            if parallel_downloads and "average_speed_mbps" in stats:
-                logger.info(f"Average speed: {stats['average_speed_mbps']:.2f} MB/s")
-
-        else:
-            logger.warning("No files were downloaded")
-
-        # Final rate limit status
+        started = time()
+        stats = download_folder_parallel(
+            repository=repository,
+            sha=sha,
+            path=path,
+            output=effective_output,
+            force=force,
+            max_concurrent=effective_concurrent if effective_parallel else 1,
+            verify_integrity=effective_integrity,
+            use_cache=effective_cache,
+            github_client=github_client,
+            api_retry_handler=api_retry,
+            quiet=effective_quiet,
+            show_progress=effective_progress,
+            file_filter=file_filter,
+            ref_name=resolved_ref,
+            timeout=config.download.timeout,
+            chunk_size=config.download.chunk_size,
+            max_retries=effective_retries,
+            retry_delay=effective_retry_delay,
+            cache_max_size_gb=config.cache.max_size_gb,
+            cache_max_age_days=config.cache.max_age_days,
+            cache_auto_cleanup=config.cache.auto_cleanup,
+        )
+        logger.summary(stats["total_files"], stats["total_size"], time() - started)
+        logger.success(f"Installed to {stats['destination']}")
+        if stats["filtered_files"]:
+            logger.info(f"Filtered out: {stats['filtered_files']} files")
+        if stats["cached_files"]:
+            logger.info(f"Cache hits: {stats['cached_files']} files")
+    except (ValidationError, PydanticValidationError, ValueError) as error:
+        logger.error(str(error))
         if verbose:
-            logger.progress_info("Final rate limit status:")
-            if github_client:
-                github_client.log_rate_limit_status()
-            else:
-                logger.info("Rate limiting was disabled for this session")
+            logger.debug("Input/configuration failure", exc_info=True)
+        raise typer.Exit(2) from error
+    except (DownloadOperationError, RetryError, GithubException, OSError) as error:
+        logger.error(str(error))
+        if verbose:
+            logger.debug("Operational failure", exc_info=True)
+        raise typer.Exit(1) from error
+    except Exception as error:
+        logger.error(f"Unexpected error: {error}")
+        if verbose:
+            logger.debug("Unexpected failure", exc_info=True)
+        raise typer.Exit(1) from error
 
-    except ValidationError as e:
-        logger.error(f"Validation error: {e}")
-        raise
-    except RetryError as e:
-        logger.error(f"Operation failed after retries: {e}")
-        raise
-    except GithubException as e:
-        logger.error(f"GitHub API error: {e}")
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        raise
+
+def _resolve_ref_path(repository, tree_segments, *, explicit_ref, explicit_path, retry_handler):
+    if explicit_ref:
+        sha = retry_handler.retry_api_call(
+            lambda: get_sha_for_branch_or_tag(repository, explicit_ref), f"resolve ref {explicit_ref}"
+        )
+        ref_segments = tuple(explicit_ref.split("/"))
+        inferred_path = ""
+        if tuple(tree_segments[: len(ref_segments)]) == ref_segments:
+            inferred_path = "/".join(tree_segments[len(ref_segments) :])
+        return explicit_ref, sha, explicit_path if explicit_path is not None else inferred_path
+
+    resolved_ref, sha, inferred_path = resolve_ref_and_path(repository, tuple(tree_segments))
+    return resolved_ref, sha, explicit_path if explicit_path is not None else inferred_path
+
+
+def _resolve_filter_config(
+    configured: FilterConfig,
+    *,
+    filter_preset: str | None,
+    include_extensions: list[str] | None,
+    exclude_extensions: list[str] | None,
+    include_patterns: list[str] | None,
+    exclude_patterns: list[str] | None,
+    min_size: str | None,
+    max_size: str | None,
+    exclude_binary: bool | None,
+    exclude_large_files: bool | None,
+    respect_gitignore: bool | None,
+) -> FilterConfig:
+    values = configured.model_dump()
+    if filter_preset:
+        values.update(get_preset_filter(filter_preset).model_dump())
+    overrides = {
+        "include_extensions": include_extensions,
+        "exclude_extensions": exclude_extensions,
+        "include_patterns": include_patterns,
+        "exclude_patterns": exclude_patterns,
+        "exclude_binary": exclude_binary,
+        "exclude_large_files": exclude_large_files,
+        "respect_gitignore": respect_gitignore,
+    }
+    values.update({key: value for key, value in overrides.items() if value is not None})
+    if min_size is not None:
+        parsed = _parse_size_string(min_size)
+        if parsed is None:
+            raise ValidationError(f"Invalid min-size format: {min_size}")
+        values["min_size_bytes"] = parsed
+    if max_size is not None:
+        parsed = _parse_size_string(max_size)
+        if parsed is None:
+            raise ValidationError(f"Invalid max-size format: {max_size}")
+        values["max_size_bytes"] = parsed
+    return FilterConfig(**values)
 
 
 def _parse_size_string(size_str: str) -> int | None:
-    """
-    Parse a human-readable size string into bytes.
-
-    Args:
-        size_str: Size string like "10MB", "1KB", "500B"
-
-    Returns:
-        Size in bytes, or None if parsing failed
-    """
-    size_str = size_str.strip().upper()
-
-    # Define size multipliers
-    multipliers = {
-        "B": 1,
-        "KB": 1024,
-        "MB": 1024 * 1024,
-        "GB": 1024 * 1024 * 1024,
-        "TB": 1024 * 1024 * 1024 * 1024,
-    }
-
-    # Try to extract number and unit
-    import re
-
-    # Fixed regex: requires at least one digit, properly handles decimal numbers
-    match = re.match(r"^(\d+(?:\.\d+)?)\s*([KMGT]?B?)$", size_str)
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([KMGT]?B)?", size_str.strip().upper())
     if not match:
         return None
-
-    number_str, unit = match.groups()
-
-    try:
-        number = float(number_str)
-        # Ensure positive number
-        if number < 0:
-            return None
-    except ValueError:
-        return None
-
-    # Default to bytes if no unit specified
-    if not unit or unit == "":
-        unit = "B"
-
-    # Handle common abbreviations
-    if unit in multipliers:
-        return int(number * multipliers[unit])
-
-    return None
+    number, unit = match.groups()
+    multipliers = {
+        None: 1,
+        "B": 1,
+        "KB": 1024,
+        "MB": 1024**2,
+        "GB": 1024**3,
+        "TB": 1024**4,
+    }
+    return int(float(number) * multipliers[unit])

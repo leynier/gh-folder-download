@@ -6,15 +6,24 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import ValidationError as PydanticValidationError
 
 from .logger import get_logger
 
 
-class DownloadConfig(BaseModel):
+class ConfigurationError(Exception):
+    """Raised when configuration cannot be loaded or validated."""
+
+
+class ConfigModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class DownloadConfig(ConfigModel):
     """Download-related configuration."""
 
     max_concurrent: int = Field(default=5, ge=1, le=20, description="Maximum concurrent downloads")
@@ -26,7 +35,7 @@ class DownloadConfig(BaseModel):
     parallel_downloads: bool = Field(default=True, description="Enable parallel downloads")
 
 
-class CacheConfig(BaseModel):
+class CacheConfig(ConfigModel):
     """Cache-related configuration."""
 
     enabled: bool = Field(default=True, description="Enable caching")
@@ -35,7 +44,7 @@ class CacheConfig(BaseModel):
     auto_cleanup: bool = Field(default=True, description="Enable automatic cache cleanup")
 
 
-class RateLimitConfig(BaseModel):
+class RateLimitConfig(ConfigModel):
     """Rate limiting configuration."""
 
     enabled: bool = Field(default=True, description="Enable rate limiting")
@@ -43,7 +52,7 @@ class RateLimitConfig(BaseModel):
     aggressive_mode: bool = Field(default=False, description="Use aggressive rate limiting")
 
 
-class FilterConfig(BaseModel):
+class FilterConfig(ConfigModel):
     """File filtering configuration."""
 
     # Extension filters
@@ -72,7 +81,7 @@ class FilterConfig(BaseModel):
         return [ext if ext.startswith(".") else f".{ext}" for ext in v]
 
 
-class PathConfig(BaseModel):
+class PathConfig(ConfigModel):
     """Path-related configuration."""
 
     default_output: str = Field(default=".", description="Default output directory")
@@ -80,16 +89,16 @@ class PathConfig(BaseModel):
     preserve_structure: bool = Field(default=True, description="Preserve repository structure")
 
 
-class UIConfig(BaseModel):
+class UIConfig(ConfigModel):
     """User interface configuration."""
 
     show_progress: bool = Field(default=True, description="Show progress bars")
-    verbosity: str = Field(default="INFO", description="Log level")
+    verbosity: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(default="INFO", description="Log level")
     use_colors: bool = Field(default=True, description="Use colored output")
     quiet_mode: bool = Field(default=False, description="Quiet mode")
 
 
-class GHFolderDownloadConfig(BaseModel):
+class GHFolderDownloadConfig(ConfigModel):
     """Main configuration model."""
 
     # Authentication
@@ -121,8 +130,7 @@ class GHFolderDownloadConfig(BaseModel):
 
         is_valid_format = False
 
-        if v.startswith("ghp_") and len(v) == 40:
-            # Classic personal access token
+        if v.startswith(("ghp_", "gho_", "ghu_", "ghs_", "ghr_")) and len(v) >= 20:
             is_valid_format = True
         elif v.startswith("github_pat_") and len(v) >= 50:
             # Fine-grained personal access token
@@ -183,6 +191,7 @@ class ConfigManager:
         """
         # Start with defaults
         config_data = {}
+        self.config_file_path = None
 
         # Load from file
         if config_file:
@@ -197,7 +206,7 @@ class ConfigManager:
                     break
 
         # Override with environment variables
-        config_data.update(self._load_from_env())
+        self._deep_merge(config_data, self._load_from_env())
 
         # Create and validate configuration
         try:
@@ -205,9 +214,15 @@ class ConfigManager:
             self.logger.debug("Configuration loaded successfully")
             if self.config_file_path:
                 self.logger.debug(f"Config file: {self.config_file_path}")
-        except (ValueError, TypeError, AttributeError) as e:
-            self.logger.warning(f"Invalid configuration: {e}")
-            self.config = GHFolderDownloadConfig()
+            if self.config.rate_limit.aggressive_mode:
+                self.logger.warning("rate_limit.aggressive_mode is deprecated and has no effect")
+            if not self.config.paths.create_subdirs or not self.config.paths.preserve_structure:
+                self.logger.warning(
+                    "paths.create_subdirs and paths.preserve_structure are deprecated; "
+                    "repository structure is preserved"
+                )
+        except (PydanticValidationError, ValueError, TypeError, AttributeError) as e:
+            raise ConfigurationError(f"Invalid configuration: {e}") from e
 
         return self.config
 
@@ -217,11 +232,20 @@ class ConfigManager:
             self.logger.debug(f"Loading config from: {file_path}")
             with open(file_path, encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
+            if not isinstance(data, dict):
+                raise ConfigurationError(f"Configuration root must be a mapping: {file_path}")
             self.logger.debug(f"Loaded {len(data)} configuration sections")
             return data
         except (OSError, yaml.YAMLError) as e:
-            self.logger.warning(f"Failed to load config from {file_path}: {e}")
-            return {}
+            raise ConfigurationError(f"Failed to load config from {file_path}: {e}") from e
+
+    def _deep_merge(self, target: dict[str, Any], overrides: dict[str, Any]) -> None:
+        """Merge nested configuration sections without discarding sibling values."""
+        for key, value in overrides.items():
+            if isinstance(value, dict) and isinstance(target.get(key), dict):
+                self._deep_merge(target[key], value)
+            else:
+                target[key] = value
 
     def _load_from_env(self) -> dict[str, Any]:
         """Load configuration from environment variables."""
@@ -230,14 +254,21 @@ class ConfigManager:
             f"{self.ENV_PREFIX}GITHUB_TOKEN": "github_token",
             f"{self.ENV_PREFIX}MAX_CONCURRENT": "download.max_concurrent",
             f"{self.ENV_PREFIX}TIMEOUT": "download.timeout",
+            f"{self.ENV_PREFIX}CHUNK_SIZE": "download.chunk_size",
             f"{self.ENV_PREFIX}MAX_RETRIES": "download.max_retries",
+            f"{self.ENV_PREFIX}RETRY_DELAY": "download.retry_delay",
+            f"{self.ENV_PREFIX}VERIFY_INTEGRITY": "download.verify_integrity",
+            f"{self.ENV_PREFIX}PARALLEL_DOWNLOADS": "download.parallel_downloads",
             f"{self.ENV_PREFIX}CACHE_ENABLED": "cache.enabled",
             f"{self.ENV_PREFIX}CACHE_SIZE_GB": "cache.max_size_gb",
+            f"{self.ENV_PREFIX}CACHE_MAX_AGE_DAYS": "cache.max_age_days",
+            f"{self.ENV_PREFIX}CACHE_AUTO_CLEANUP": "cache.auto_cleanup",
             f"{self.ENV_PREFIX}RATE_LIMIT_ENABLED": "rate_limit.enabled",
             f"{self.ENV_PREFIX}RATE_LIMIT_BUFFER": "rate_limit.buffer",
             f"{self.ENV_PREFIX}DEFAULT_OUTPUT": "paths.default_output",
             f"{self.ENV_PREFIX}SHOW_PROGRESS": "ui.show_progress",
             f"{self.ENV_PREFIX}VERBOSITY": "ui.verbosity",
+            f"{self.ENV_PREFIX}USE_COLORS": "ui.use_colors",
             f"{self.ENV_PREFIX}QUIET": "ui.quiet_mode",
         }
 
@@ -360,7 +391,6 @@ cache:
 rate_limit:
   enabled: true            # Enable GitHub API rate limiting
   buffer: 100              # Rate limit buffer (10-1000)
-  aggressive_mode: false   # Use aggressive rate limiting
 
 # File filtering settings
 filters:
@@ -384,8 +414,6 @@ filters:
 # Path settings
 paths:
   default_output: "."          # Default output directory
-  create_subdirs: true         # Create subdirectories for organization
-  preserve_structure: true     # Preserve repository directory structure
 
 # User interface settings
 ui:

@@ -3,10 +3,9 @@ Input validation utilities for gh-folder-download.
 """
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlparse
-
-from github import Github, GithubException
+from urllib.parse import unquote, urlparse
 
 from .logger import get_logger
 
@@ -15,6 +14,13 @@ class ValidationError(Exception):
     """Custom exception for validation errors."""
 
     pass
+
+
+@dataclass(frozen=True)
+class ParsedGitHubURL:
+    owner: str
+    repository: str
+    tree_segments: tuple[str, ...] = ()
 
 
 class InputValidator:
@@ -41,16 +47,20 @@ class InputValidator:
         Raises:
             ValidationError: If URL is invalid
         """
-        self.logger.debug(f"Validating GitHub URL: {url}")
+        parsed_url = self.parse_github_url(url)
+        branch = parsed_url.tree_segments[0] if parsed_url.tree_segments else None
+        folder_path = "/".join(parsed_url.tree_segments[1:])
+        return parsed_url.owner, parsed_url.repository, branch, folder_path
 
-        if not url:
-            raise ValidationError("URL cannot be empty")
+    def parse_github_url(self, url: str) -> ParsedGitHubURL:
+        """Validate a URL while preserving all segments needed to resolve refs containing slashes."""
+        self.logger.debug(f"Validating GitHub URL: {url}")
 
         if not isinstance(url, str):
             raise ValidationError("URL must be a string")
 
-        # Remove trailing slashes and .git suffix
-        url = url.rstrip("/").rstrip(".git")
+        if not url:
+            raise ValidationError("URL cannot be empty")
 
         # Basic URL structure validation
         if not url.startswith("https://github.com/"):
@@ -61,17 +71,21 @@ class InputValidator:
             parsed = urlparse(url)
             if parsed.netloc != "github.com":
                 raise ValidationError("Invalid GitHub domain")
+            if parsed.query or parsed.fragment:
+                raise ValidationError("GitHub URL must not contain a query string or fragment")
         except Exception as e:
             raise ValidationError(f"Malformed URL: {e}") from e
 
         # Extract path components
-        path_parts = parsed.path.strip("/").split("/")
+        path_parts = [unquote(part) for part in parsed.path.strip("/").split("/")]
 
         if len(path_parts) < 2:
             raise ValidationError("Invalid GitHub URL - must include owner and repository")
 
         org = path_parts[0]
         repo = path_parts[1]
+        if repo.endswith(".git"):
+            repo = repo[:-4]
 
         # Validate org and repo names
         if not self.GITHUB_NAME_PATTERN.match(org):
@@ -80,29 +94,16 @@ class InputValidator:
         if not self.GITHUB_NAME_PATTERN.match(repo):
             raise ValidationError(f"Invalid repository name: {repo}")
 
-        # Handle branch and path
-        branch = None
-        folder_path = ""
-
+        tree_segments: tuple[str, ...] = ()
         if len(path_parts) >= 3:
-            if path_parts[2] == "tree" and len(path_parts) >= 4:
-                branch = path_parts[3]
-                if len(path_parts) > 4:
-                    folder_path = "/".join(path_parts[4:])
-            else:
-                # Direct path without /tree/ - not standard GitHub URL
-                raise ValidationError("Invalid GitHub URL format - use /tree/branch/path format for specific folders")
+            if path_parts[2] != "tree" or len(path_parts) < 4:
+                raise ValidationError("Invalid GitHub URL format - use /tree/ref/path for specific folders")
+            tree_segments = tuple(path_parts[3:])
+            if not all(self._is_valid_path(segment) for segment in tree_segments):
+                raise ValidationError("Invalid branch, tag, or folder path")
 
-        # Validate branch name if provided
-        if branch and not self._is_valid_git_ref(branch):
-            raise ValidationError(f"Invalid branch/tag name: {branch}")
-
-        # Validate folder path
-        if folder_path and not self._is_valid_path(folder_path):
-            raise ValidationError(f"Invalid folder path: {folder_path}")
-
-        self.logger.debug(f"Validated URL - Org: {org}, Repo: {repo}, Branch: {branch}, Path: {folder_path}")
-        return org, repo, branch, folder_path
+        self.logger.debug(f"Validated URL - Org: {org}, Repo: {repo}, Tree: {tree_segments}")
+        return ParsedGitHubURL(org, repo, tree_segments)
 
     def validate_output_path(
         self,
@@ -187,8 +188,7 @@ class InputValidator:
         # Legacy tokens: 40-char hex strings
         is_valid_format = False
 
-        if token.startswith("ghp_") and len(token) == 40:
-            # Classic personal access token
+        if token.startswith(("ghp_", "gho_", "ghu_", "ghs_", "ghr_")) and len(token) >= 20:
             is_valid_format = True
         elif token.startswith("github_pat_") and len(token) >= 50:
             # Fine-grained personal access token
@@ -203,25 +203,7 @@ class InputValidator:
                 "fine-grained (github_pat_...), or legacy (40-char hex) token."
             )
 
-        # Test token validity
-        try:
-            github = Github(token)
-            user = github.get_user()
-            # Just accessing the login to test the token
-            _ = user.login
-            self.logger.debug(f"GitHub token validated for user: {user.login}")
-            return token
-        except GithubException as e:
-            if e.status == 401:
-                raise ValidationError("Invalid GitHub token - authentication failed") from e
-            elif e.status == 403:
-                raise ValidationError("GitHub token has insufficient permissions") from e
-            else:
-                self.logger.warning(f"Could not fully validate token: {e}")
-                return token  # Return token anyway, might be a temporary API issue
-        except Exception as e:
-            self.logger.warning(f"Token validation failed: {e}")
-            return token  # Return token anyway
+        return token
 
     def validate_log_file_path(self, log_file: Path | None) -> Path | None:
         """
@@ -294,9 +276,15 @@ class InputValidator:
         if "\x00" in path:
             return False
 
-        # Check for dangerous path components
-        dangerous = ["..", "./", "\\"]
-        return all(danger not in path for danger in dangerous)
+        if "\\" in path or path.startswith("/"):
+            return False
+        return all(part not in ("", ".", "..") for part in path.split("/"))
+
+    def validate_repository_path(self, path: str) -> str:
+        """Validate a repository-relative path supplied outside a GitHub URL."""
+        if path and not self._is_valid_path(path):
+            raise ValidationError(f"Invalid repository path: {path}")
+        return path
 
     def _is_writable(self, path: Path) -> bool:
         """Check if a path is writable."""

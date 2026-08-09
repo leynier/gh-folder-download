@@ -3,8 +3,10 @@ Parallel download system for gh-folder-download using asyncio.
 """
 
 import asyncio
+import contextlib
+import os
+import random
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -55,6 +57,11 @@ class ParallelDownloader:
         use_cache: bool = True,
         show_progress: bool = True,
         quiet: bool = False,
+        max_retries: int = 3,
+        retry_delay: float = 1.0,
+        cache_max_size_gb: float = 5.0,
+        cache_max_age_days: int = 30,
+        cache_auto_cleanup: bool = True,
     ):
         """
         Initialize parallel downloader.
@@ -75,16 +82,26 @@ class ParallelDownloader:
         self.use_cache = use_cache
         self.show_progress = show_progress
         self.quiet = quiet
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
 
         self.logger = get_logger()
 
         # Initialize cache and integrity checker
-        self.cache = DownloadCache() if use_cache else None
-        self.integrity_checker = FileIntegrityChecker() if verify_integrity else None
+        self.cache = (
+            DownloadCache(
+                max_size_gb=cache_max_size_gb,
+                max_age_days=cache_max_age_days,
+                auto_cleanup=cache_auto_cleanup,
+            )
+            if use_cache
+            else None
+        )
+        self.integrity_checker = FileIntegrityChecker() if verify_integrity or use_cache else None
 
         # Initialize progress tracker
         if show_progress and not quiet:
-            self.progress_tracker = ProgressTracker(quiet=quiet)
+            self.progress_tracker = ProgressTracker(console=self.logger.console, quiet=quiet)
         else:
             self.progress_tracker = SimpleProgressTracker()
 
@@ -187,10 +204,11 @@ class ParallelDownloader:
 
         async with semaphore:
             # Check cache first
-            if self.cache and self._check_cache(task):
+            if self.cache and await asyncio.to_thread(self._check_cache, task):
                 self.logger.debug(f"📁 Cache hit: {task.file_path}")
 
                 # Update progress for cached file
+                self.progress_tracker.update_file_progress(task.file_path, task.expected_size or 0)
                 self.progress_tracker.complete_file(task.file_path, success=True, from_cache=True)
 
                 return DownloadResult(
@@ -202,50 +220,62 @@ class ParallelDownloader:
                     integrity_verified=True,  # Assume cached files are verified
                 )
 
-            try:
-                # Ensure parent directory exists
-                task.local_path.parent.mkdir(parents=True, exist_ok=True)
+            result = await self._download_with_retries(session, task, start_time)
+            self.progress_tracker.complete_file(task.file_path, success=result.success)
+            return result
 
-                # Download the file with progress tracking
+    async def _download_with_retries(
+        self,
+        session: aiohttp.ClientSession,
+        task: DownloadTask,
+        start_time: float,
+    ) -> DownloadResult:
+        """Download one file to a temporary path and retry transient failures."""
+        task.local_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path = task.local_path.with_name(f".{task.local_path.name}.part-{os.getpid()}-{id(task)}")
+        retryable_statuses = {408, 429, 500, 502, 503, 504}
+        last_error = "unknown download error"
+
+        for attempt in range(1, self.max_retries + 1):
+            with contextlib.suppress(OSError):
+                part_path.unlink()
+            self.progress_tracker.update_file_progress(task.file_path, 0)
+            try:
                 async with session.get(task.download_url) as response:
                     if response.status != 200:
-                        error_msg = f"HTTP {response.status}: {response.reason}"
-                        self.logger.error(f"❌ Download failed for {task.file_path}: {error_msg}")
-
-                        # Update progress for failed file
-                        self.progress_tracker.complete_file(task.file_path, success=False)
-
-                        return DownloadResult(
-                            task=task,
-                            success=False,
-                            error=error_msg,
-                            duration=time.time() - start_time,
+                        last_error = f"HTTP {response.status}: {response.reason}"
+                        if response.status not in retryable_statuses:
+                            break
+                        retry_after = response.headers.get("Retry-After")
+                        delay = (
+                            float(retry_after) if retry_after and retry_after.isdigit() else self._retry_delay(attempt)
                         )
+                        if attempt < self.max_retries:
+                            await asyncio.sleep(delay)
+                        continue
 
-                    # Stream download with progress updates
                     total_downloaded = 0
-                    with open(task.local_path, "wb") as file:
+                    with open(part_path, "wb") as file:
                         async for chunk in response.content.iter_chunked(self.chunk_size):
                             file.write(chunk)
                             total_downloaded += len(chunk)
-
-                            # Update progress
                             self.progress_tracker.update_file_progress(task.file_path, total_downloaded)
 
-                # Verify integrity if enabled
                 integrity_verified = True
                 if self.verify_integrity and self.integrity_checker:
-                    integrity_verified = await self._verify_file_integrity(task)
+                    integrity_verified = await self._verify_file_integrity(task, part_path)
+                    if not integrity_verified:
+                        last_error = "integrity verification failed"
+                        if attempt < self.max_retries:
+                            await asyncio.sleep(self._retry_delay(attempt))
+                            continue
+                        break
 
-                # Update cache if enabled
-                if self.cache and integrity_verified:
+                part_path.replace(task.local_path)
+                if self.cache:
                     await self._add_to_cache(task)
 
                 self.logger.debug(f"✅ Downloaded: {task.file_path} ({total_downloaded} bytes)")
-
-                # Update progress for completed file
-                self.progress_tracker.complete_file(task.file_path, success=True)
-
                 return DownloadResult(
                     task=task,
                     success=True,
@@ -253,34 +283,24 @@ class ParallelDownloader:
                     duration=time.time() - start_time,
                     integrity_verified=integrity_verified,
                 )
+            except (TimeoutError, aiohttp.ClientError, OSError) as e:
+                last_error = str(e) or type(e).__name__
+                if attempt < self.max_retries:
+                    await asyncio.sleep(self._retry_delay(attempt))
 
-            except TimeoutError:
-                error_msg = f"Download timeout after {self.timeout}s"
-                self.logger.error(f"⏰ {error_msg}: {task.file_path}")
+        with contextlib.suppress(OSError):
+            part_path.unlink()
+        self.logger.error(f"Download failed for {task.file_path}: {last_error}")
+        return DownloadResult(
+            task=task,
+            success=False,
+            error=last_error,
+            duration=time.time() - start_time,
+            integrity_verified=False,
+        )
 
-                # Update progress for failed file
-                self.progress_tracker.complete_file(task.file_path, success=False)
-
-                return DownloadResult(
-                    task=task,
-                    success=False,
-                    error=error_msg,
-                    duration=time.time() - start_time,
-                )
-
-            except (aiohttp.ClientError, OSError) as e:
-                error_msg = f"Unexpected error: {str(e)}"
-                self.logger.error(f"💥 {error_msg}: {task.file_path}")
-
-                # Update progress for failed file
-                self.progress_tracker.complete_file(task.file_path, success=False)
-
-                return DownloadResult(
-                    task=task,
-                    success=False,
-                    error=error_msg,
-                    duration=time.time() - start_time,
-                )
+    def _retry_delay(self, attempt: int) -> float:
+        return min(120.0, self.retry_delay * (2 ** (attempt - 1))) * random.uniform(0.5, 1.5)
 
     def _check_cache(self, task: DownloadTask) -> bool:
         """Check if file is available in cache."""
@@ -296,7 +316,7 @@ class ParallelDownloader:
             local_file_path=task.local_path,
         )
 
-    async def _verify_file_integrity(self, task: DownloadTask) -> bool:
+    async def _verify_file_integrity(self, task: DownloadTask, file_path: Path | None = None) -> bool:
         """Verify file integrity in a thread pool."""
         if not self.integrity_checker:
             return True
@@ -305,18 +325,17 @@ class ParallelDownloader:
             try:
                 # Type guard to ensure integrity_checker is not None
                 assert self.integrity_checker is not None
-                self.integrity_checker.verify_file_size(task.local_path, task.expected_size)
-                self.integrity_checker.verify_file_content(task.local_path)
+                checked_path = file_path or task.local_path
+                self.integrity_checker.verify_file_size(checked_path, task.expected_size)
+                self.integrity_checker.verify_git_blob_sha(checked_path, task.sha)
+                self.integrity_checker.verify_file_content(checked_path)
                 return True
             except IntegrityError as e:
                 self.logger.error(f"Integrity verification failed for {task.file_path}: {e}")
                 return False
 
         # Run integrity check in thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
-        max_workers = min(2, max(1, self.max_concurrent_downloads // 2))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            return await loop.run_in_executor(executor, verify)
+        return await asyncio.to_thread(verify)
 
     async def _add_to_cache(self, task: DownloadTask) -> None:
         """Add file to cache in a thread pool."""
@@ -345,9 +364,7 @@ class ParallelDownloader:
                 self.logger.warning(f"Failed to add {task.file_path} to cache: {e}")
 
         # Run cache operation in thread pool
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            await loop.run_in_executor(executor, add_to_cache)
+        await asyncio.to_thread(add_to_cache)
 
     def _update_stats(self, results: list[DownloadResult], total_time: float) -> None:
         """Update download statistics."""

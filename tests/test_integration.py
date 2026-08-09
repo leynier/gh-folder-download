@@ -9,7 +9,6 @@ NOTE: These tests require internet connection and may be slow.
 
 import os
 import shutil
-from pathlib import Path
 
 import pytest
 
@@ -18,22 +17,22 @@ from gh_folder_download.filters import FileFilter
 from gh_folder_download.rate_limiter import RateLimitedGitHubClient
 from gh_folder_download.validation import InputValidator
 
-# Test output directory (git-ignored)
-DOWNLOADS_DIR = Path(__file__).parent / "downloads"
 
-
-@pytest.fixture(scope="module")
-def downloads_dir():
-    """Create and return the downloads directory."""
-    DOWNLOADS_DIR.mkdir(exist_ok=True)
-    return DOWNLOADS_DIR
+@pytest.fixture
+def downloads_dir(tmp_path):
+    """Keep network-test downloads outside the source tree."""
+    return tmp_path
 
 
 @pytest.fixture(scope="module")
 def github_client():
     """Create a rate-limited GitHub client."""
     token = os.environ.get("GITHUB_TOKEN")
-    return RateLimitedGitHubClient(token=token)
+    client = RateLimitedGitHubClient(token=token)
+    core_status = client.get_rate_limit_status().get("core", {})
+    if not token and core_status.get("remaining", 0) <= 5:
+        pytest.skip("Anonymous GitHub API quota is nearly exhausted")
+    return client
 
 
 @pytest.fixture
@@ -235,13 +234,3 @@ class TestRateLimiting:
 
         # Status may be empty if rate limit API changed, just verify it's a dict
         assert isinstance(status, dict)
-
-
-# Cleanup fixture
-@pytest.fixture(scope="session", autouse=True)
-def cleanup_downloads():
-    """Optionally clean up downloads after all tests."""
-    yield
-    # Uncomment to clean up after tests:
-    # if DOWNLOADS_DIR.exists():
-    #     shutil.rmtree(DOWNLOADS_DIR)

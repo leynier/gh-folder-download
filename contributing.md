@@ -18,9 +18,8 @@ You can help out by:
 
 We're using the following branches to manage work:
 
-* `develop` is semi-stable and should be used as the branch to fork from
-* `main` is stable and ready for prod (or it will be once we merge in the first release)
-* `feature`, `bug` branches: unstable development
+* `main` is the protected release branch
+* Feature and bugfix work should use short-lived branches based on `main`
 
 ## How to report bugs
 
@@ -47,13 +46,16 @@ We use GitHub to host code, to track issues and feature requests, as well as acc
 Pull requests are the best way to propose changes to the codebase. We use a loose version of Git Flow
 and actively welcome your pull requests:
 
-1. Create a new branch based on `develop`:
+1. Create a new branch based on `main`:
    * Feature branches should start with `feature/`
    * Bugfix branches should start with `bug/`
 2. Implement your changes.
 3. Add tests if applicable.
-4. Make sure your code lints.
+4. Run `make check`.
 5. Issue that pull request!
+
+The offline test suite measures every maintained `gh_folder_download` module and enforces 100% line coverage. A change
+with an uncovered executable line fails `make check` and the GitHub Actions `checks` job.
 
 ### Any contributions you make will be under the MIT License
 

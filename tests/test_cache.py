@@ -1,9 +1,14 @@
 """Tests for caching system."""
 
+import builtins
+import json
 import time
+from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
+from gh_folder_download import cache as cache_module
 from gh_folder_download.cache import CacheEntry, DownloadCache
 
 
@@ -94,9 +99,34 @@ class TestDownloadCache:
 
     def test_cache_dir_created(self, cache_dir):
         """Test cache directory is created."""
-        cache = DownloadCache(cache_dir=cache_dir)
+        DownloadCache(cache_dir=cache_dir)
 
         assert cache_dir.exists()
+
+    def test_default_cache_directory_uses_xdg_cache_home(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+        cache = DownloadCache(auto_cleanup=False)
+        assert cache.cache_dir == tmp_path / "gh-folder-download"
+
+    def test_existing_cache_metadata_is_loaded(self, cache_dir):
+        cache_dir.mkdir()
+        entry = CacheEntry("file.txt", "abc123", 1, "now", 1).to_dict()
+        (cache_dir / "cache_metadata.json").write_text(json.dumps({"key": entry}))
+
+        cache = DownloadCache(cache_dir=cache_dir, auto_cleanup=False)
+
+        assert cache.cache_data["key"].file_path == "file.txt"
+
+    @pytest.mark.parametrize("contents", ["not json", '{"key": {}}'])
+    def test_invalid_cache_metadata_starts_fresh(self, cache_dir, contents):
+        cache_dir.mkdir()
+        (cache_dir / "cache_metadata.json").write_text(contents)
+        assert DownloadCache(cache_dir=cache_dir, auto_cleanup=False).cache_data == {}
+
+    def test_save_cache_error_is_tolerated(self, download_cache, monkeypatch):
+        monkeypatch.setattr(builtins, "open", Mock(side_effect=OSError("denied")))
+        download_cache._save_cache()
+        assert download_cache.cache_data == {}
 
     def test_is_file_cached_new_file(self, download_cache, tmp_path):
         """Test is_file_cached returns False for new file."""
@@ -167,6 +197,101 @@ class TestDownloadCache:
         )
 
         assert result is False
+
+    def test_missing_cached_blob_invalidates_all_matching_entries(self, download_cache, tmp_path):
+        local = tmp_path / "file.txt"
+        local.write_text("content")
+        download_cache.add_file_to_cache("user/repo", "one.txt", "main", "abc123", 7, local)
+        key = download_cache._get_cache_key("other/repo", "two.txt", "main")
+        download_cache.cache_data[key] = CacheEntry("two.txt", "abc123", 7, "now", time.time())
+        download_cache._get_blob_path("abc123").unlink()
+
+        assert download_cache.is_file_cached("user/repo", "one.txt", "main", "abc123", 7, local) is False
+        assert download_cache.cache_data == {}
+
+    def test_cached_blob_size_mismatch_is_removed(self, download_cache, tmp_path):
+        local = tmp_path / "file.txt"
+        local.write_text("content")
+        download_cache.add_file_to_cache("user/repo", "file.txt", "main", "abc123", 7, local)
+        download_cache._get_blob_path("abc123").write_text("wrong size")
+
+        assert download_cache.is_file_cached("user/repo", "file.txt", "main", "abc123", 7, local) is False
+        assert not download_cache._get_blob_path("abc123").exists()
+
+    def test_cached_blob_checksum_mismatch_is_removed(self, download_cache, tmp_path):
+        local = tmp_path / "file.txt"
+        local.write_text("content")
+        download_cache.add_file_to_cache(
+            "user/repo",
+            "file.txt",
+            "main",
+            "abc123",
+            7,
+            local,
+            checksums={"sha256": "0" * 64},
+        )
+
+        assert download_cache.is_file_cached("user/repo", "file.txt", "main", "abc123", 7, local) is False
+
+    def test_restore_error_removes_requested_entry(self, download_cache, tmp_path, monkeypatch):
+        local = tmp_path / "file.txt"
+        local.write_text("content")
+        download_cache.add_file_to_cache("user/repo", "file.txt", "main", "abc123", 7, local)
+        monkeypatch.setattr(cache_module.shutil, "copy2", Mock(side_effect=OSError("denied")))
+
+        assert download_cache.is_file_cached("user/repo", "file.txt", "main", "abc123", 7, local) is False
+
+    def test_store_error_does_not_create_entry(self, download_cache, tmp_path, monkeypatch):
+        local = tmp_path / "file.txt"
+        local.write_text("content")
+        monkeypatch.setattr(cache_module.shutil, "copy2", Mock(side_effect=OSError("denied")))
+
+        download_cache.add_file_to_cache("user/repo", "file.txt", "main", "abc123", 7, local)
+
+        assert download_cache.cache_data == {}
+
+    def test_stat_error_uses_current_time_for_metadata(self, download_cache, tmp_path, monkeypatch):
+        local = tmp_path / "file.txt"
+        local.write_text("content")
+        original_stat = Path.stat
+
+        def conditional_stat(path, *args, **kwargs):
+            if path == local:
+                raise OSError("denied")
+            return original_stat(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "stat", conditional_stat)
+        download_cache.add_file_to_cache("user/repo", "file.txt", "main", "abc123", 7, local)
+
+        key = download_cache._get_cache_key("user/repo", "file.txt", "main")
+        assert download_cache.cache_data[key].last_modified
+
+    def test_cache_restores_same_size_tampering(self, download_cache, tmp_path):
+        local_file = tmp_path / "test.txt"
+        local_file.write_text("original")
+        download_cache.add_file_to_cache(
+            repo_full_name="user/repo",
+            file_path="test.txt",
+            ref="main",
+            github_sha="abc123",
+            github_size=8,
+            local_file_path=local_file,
+            checksums={"sha256": "0682c5f2076f099c34cfdd15a9e063849ed437a49677e6fcc5b4198c76575be5"},
+        )
+        local_file.write_text("tampered")
+
+        assert download_cache.is_file_cached("user/repo", "test.txt", "main", "abc123", 8, local_file)
+        assert local_file.read_text() == "original"
+
+    def test_blob_can_be_reused_for_a_new_destination(self, download_cache, tmp_path):
+        original = tmp_path / "first" / "test.txt"
+        original.parent.mkdir()
+        original.write_text("content")
+        download_cache.add_file_to_cache("user/repo", "test.txt", "main", "abc123", 7, original)
+        restored = tmp_path / "second" / "test.txt"
+
+        assert download_cache.is_file_cached("user/repo", "other.txt", "other-ref", "abc123", 7, restored)
+        assert restored.read_text() == "content"
 
     def test_get_cached_checksums(self, download_cache, tmp_path):
         """Test retrieving cached checksums."""
@@ -252,6 +377,32 @@ class TestCacheCleanup:
 
         stats = download_cache.get_cache_stats()
         assert stats["total_entries"] == 0
+
+    def test_clean_cache_keeps_recent_entries(self, download_cache, tmp_path):
+        local = tmp_path / "file.txt"
+        local.write_text("content")
+        download_cache.add_file_to_cache("user/repo", "file.txt", "main", "abc123", 7, local)
+        assert download_cache.clean_cache(max_age_days=30) == 0
+
+    def test_enforce_size_limit_evicts_oldest_and_saves(self, download_cache, tmp_path, monkeypatch):
+        local = tmp_path / "file.txt"
+        local.write_text("content")
+        download_cache.add_file_to_cache("user/repo", "one.txt", "main", "abc123", 7, local)
+        download_cache.add_file_to_cache("user/repo", "two.txt", "main", "def456", 7, local)
+        save = Mock()
+        monkeypatch.setattr(download_cache, "_save_cache", save)
+
+        removed = download_cache.enforce_size_limit(0)
+
+        assert removed == 2
+        assert download_cache.cache_data == {}
+        save.assert_called_once()
+
+    def test_finalize_saves_cache(self, download_cache, monkeypatch):
+        save = Mock()
+        monkeypatch.setattr(download_cache, "_save_cache", save)
+        download_cache.finalize()
+        save.assert_called_once()
 
 
 class TestCacheStats:

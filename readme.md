@@ -1,121 +1,95 @@
 # GitHub Folder Downloader
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/pypi/v/gh-folder-download?color=%2334D058\&label=Version)](https://pypi.org/project/gh-folder-download)
-[![Last commit](https://img.shields.io/github/last-commit/leynier/gh-folder-download.svg?style=flat)](https://github.com/leynier/gh-folder-download/commits)
-[![Commit activity](https://img.shields.io/github/commit-activity/m/leynier/gh-folder-download)](https://github.com/leynier/gh-folder-download/commits)
-[![Stars](https://img.shields.io/github/stars/leynier/gh-folder-download?style=flat\&logo=github)](https://github.com/leynier/gh-folder-download/stargazers)
-[![Forks](https://img.shields.io/github/forks/leynier/gh-folder-download?style=flat\&logo=github)](https://github.com/leynier/gh-folder-download/network/members)
-[![Watchers](https://img.shields.io/github/watchers/leynier/gh-folder-download?style=flat\&logo=github)](https://github.com/leynier/gh-folder-download)
-[![Contributors](https://img.shields.io/github/contributors/leynier/gh-folder-download)](https://github.com/leynier/gh-folder-download/graphs/contributors)
+[![PyPI](https://img.shields.io/pypi/v/gh-folder-download)](https://pypi.org/project/gh-folder-download)
 
-A **high-performance CLI** that lets you download individual folders, branches, or entire repositories from GitHub **without cloning** the whole repo. Written in Python with a focus on speed, reliability, and an excellent terminal experience.
-
----
-
-## Table of Contents
-
-* [Overview](#overview)
-* [Key Features](#key-features)
-* [Installation](#installation)
-* [Quick Start](#quick-start)
-* [Configuration](#configuration)
-* [Usage Recipes](#usage-recipes)
-* [CLI Reference](#cli-reference)
-* [Advanced Topics](#advanced-topics)
-* [Error Handling](#error-handling)
-* [Contributing](#contributing)
-* [License](#license)
-
----
-
-## Overview
-
-`gh-folder-download` helps you grab **just the parts of a repo you need**—perfect for CI pipelines, config backups, documentation syncs, or one-off code reviews—while saving bandwidth and GitHub API quota.
-
----
-
-## Key Features
-
-* 🚀 **Fast & Parallel** — asyncio-powered downloads with configurable concurrency.
-* 📊 **Beautiful Progress Bars** — per-file and overall progress, ETA, speed, and rich colors.
-* 💾 **Intelligent Cache** — SHA-based cache prevents re-downloading unchanged files.
-* 🔍 **Granular Filtering** — include or exclude by extension, glob pattern, size, or binary type.
-* 🏗️ **Smart Rate Limiting** — adaptive GitHub API usage with optional bypass.
-* ⚙️ **Flexible Config** — YAML config file, env vars, or CLI flags (with clear precedence).
-* ✅ **Integrity Checks** — optional size & hash verification after download.
-* 🔄 **Auto Retry** — exponential back-off for network, server, or rate-limit hiccups.
-
----
+`gh-folder-download` downloads a repository or one of its folders without cloning its Git history. It provides
+parallel transfers, transactional replacement, Git blob integrity checks, content-addressed caching, filters, retries,
+rate-limit awareness, and YAML/environment configuration.
 
 ## Installation
 
-Run instantly with [uv](https://docs.astral.sh/uv) (no install):
+Python 3.13 or newer is required.
 
 ```bash
 uvx gh-folder-download --url https://github.com/leynier/gh-folder-download
-```
-
-Or install from PyPI:
-
-```bash
-# Pick your preferred manager
+# or
 pip install gh-folder-download
-uv add gh-folder-download
-poetry add gh-folder-download
-conda install gh-folder-download
 ```
 
----
+## Destination behavior
 
-## Quick Start
+`--output` is always a **parent directory**:
 
-Download a folder from the `main` branch into the current directory:
+```text
+Repository URL                           Destination
+https://github.com/user/project          OUTPUT/project
+https://github.com/user/project/tree/main/docs/guides
+                                         OUTPUT/docs/guides
+```
+
+An existing calculated destination is rejected unless `--force` is supplied. Forced downloads are prepared and
+verified in a sibling staging directory first; the existing destination is replaced only after every selected file
+succeeds. `--force` never removes the directory passed directly to `--output`.
+
+## Usage
 
 ```bash
-gh-folder-download --url https://github.com/user/repo/tree/main/path/to/folder
+# Download a complete repository into ./project
+gh-folder-download --url https://github.com/user/project
+
+# Download one folder
+gh-folder-download \
+  --url https://github.com/user/project/tree/main/docs \
+  --output ./downloads
+
+# Use an unambiguous branch name containing slashes
+gh-folder-download \
+  --url https://github.com/user/project \
+  --ref feature/new-docs \
+  --path docs
+
+# Replace a previous destination and reuse verified cached blobs
+gh-folder-download --url https://github.com/user/project --force --use-cache
+
+# Download only Python files that are not ignored by the repository
+gh-folder-download \
+  --url https://github.com/user/project \
+  --include-extensions .py \
+  --respect-gitignore
 ```
 
-Use a token (private repo) and quiet mode:
+Run `gh-folder-download --help` for every option. Useful standalone cache commands are:
 
 ```bash
-gh-folder-download --url https://github.com/org/private-repo \
-                   --token $GITHUB_TOKEN \
-                   --quiet
+gh-folder-download --cache-stats
+gh-folder-download --clear-cache
 ```
-
----
 
 ## Configuration
 
-`gh-folder-download` reads settings in this order (later overrides earlier):
+Configuration precedence is:
 
 1. Built-in defaults
-2. YAML config file (auto or `--config-file`)
-3. Environment variables (`GH_FOLDER_DOWNLOAD_*`)
-4. CLI flags
+2. The first discovered YAML file, or `--config-file`
+3. `GH_FOLDER_DOWNLOAD_*` environment variables
+4. Explicit CLI options
 
-### Config File Locations
+Files are discovered in this order:
 
-| Priority | Path                                                   |
-| -------- | ------------------------------------------------------ |
-| 1        | `./gh-folder-download.yaml`                            |
-| 2        | `~/.config/gh-folder-download/gh-folder-download.yaml` |
-| 3        | `~/.gh-folder-download.yaml`                           |
+1. `./gh-folder-download.yaml`
+2. `~/.config/gh-folder-download/gh-folder-download.yaml`
+3. `~/.gh-folder-download.yaml`
 
-Generate a starter file:
+Generate a documented example with:
 
 ```bash
 gh-folder-download --create-config
 ```
 
-### Example Configuration File
+Example:
 
 ```yaml
-# GitHub authentication
-github_token: "your_github_token_here"
-
-# Download settings
 download:
   max_concurrent: 5
   timeout: 30
@@ -125,34 +99,26 @@ download:
   verify_integrity: true
   parallel_downloads: true
 
-# Cache settings
 cache:
   enabled: true
   max_size_gb: 5.0
   max_age_days: 30
   auto_cleanup: true
 
-# Rate limiting
 rate_limit:
   enabled: true
   buffer: 100
-  aggressive_mode: false
 
-# File filters
 filters:
-  include_extensions: [".py", ".js", ".md"]
-  exclude_extensions: [".log", ".tmp"]
+  include_extensions: [".py", ".md"]
+  exclude_patterns: ["**/generated/**"]
   exclude_binary: false
   exclude_large_files: false
-  respect_gitignore: false
+  respect_gitignore: true
 
-# Paths
 paths:
   default_output: "."
-  create_subdirs: true
-  preserve_structure: true
 
-# UI
 ui:
   show_progress: true
   verbosity: "INFO"
@@ -160,83 +126,37 @@ ui:
   quiet_mode: false
 ```
 
-### Environment Variables
+Supported environment variables include:
 
 ```bash
-export GH_FOLDER_DOWNLOAD_GITHUB_TOKEN="your_token"
+export GH_FOLDER_DOWNLOAD_GITHUB_TOKEN="github_pat_..."
 export GH_FOLDER_DOWNLOAD_MAX_CONCURRENT=10
 export GH_FOLDER_DOWNLOAD_SHOW_PROGRESS=false
 ```
 
----
+`GITHUB_TOKEN` is also accepted as a fallback when no CLI/config namespaced token is set.
 
-## Usage Recipes
+## Reliability and exit codes
 
-### Basic Download
+- `0`: traversal and installation completed, including a valid filter that selected zero files.
+- `1`: remote, download, integrity, cache, or destination failure.
+- `2`: invalid CLI input, URL, path, or configuration.
+
+Downloads use temporary `.part` files, retry transient HTTP failures with exponential backoff, verify the Git blob SHA
+when integrity checks are enabled, and install the staged directory only after complete success. Expected failures are
+shown without a traceback; use `--verbose` for diagnostic tracebacks.
+
+## Development
 
 ```bash
-gh-folder-download --url https://github.com/user/repo
+make check        # lint, format check, types, offline tests, and package build
+make integration  # network tests against GitHub
 ```
 
-### Filtering
-
-```bash
-gh-folder-download --url https://github.com/user/repo \
-                   --include-extensions .py .md \
-                   --exclude-patterns "**/test/**" "**/*.pyc"
-```
-
-### Performance Profiles
-
-| Profile  | Description          | Recommended Flags                                                                 |
-| -------- | -------------------- | --------------------------------------------------------------------------------- |
-| Fastest  | For max speed        | `--parallel-downloads --max-concurrent 20 --no-use-cache --disable-rate-limiting` |
-| Balanced | Good default         | `--parallel-downloads --max-concurrent 8 --use-cache`                             |
-| Reliable | Focus on correctness | `--max-retries 8 --retry-delay 2 --verify-integrity`                              |
-
----
-
-## CLI Reference
-
-Run `gh-folder-download --help` for the full list. Common options include:
-
-* `--url` (required): GitHub repo or folder URL
-* `--output`: Target directory
-* `--token`: GitHub personal token
-* `--include-extensions`, `--exclude-patterns`: File filters
-* `--parallel-downloads`, `--max-concurrent`: Speed tuning
-* `--show-progress`, `--quiet`, `--verbose`: Output control
-
----
-
-## Advanced Topics
-
-* **Progress Bars**: Enable/disable with `--show-progress`
-* **Caching**: SHA-based, inspect with `--cache-stats`
-* **Rate Limiting**: Adaptive, or override with `--disable-rate-limiting`
-* **File Validation**: Use `--verify-integrity`
-
----
-
-## Error Handling
-
-Handles:
-
-* Network issues (timeouts, DNS, etc.)
-* Permission and token errors
-* Invalid GitHub URLs or paths
-* Disk I/O problems
-
-Use `--verbose` or `--log-file` for deeper diagnostics.
-
----
-
-## Contributing
-
-PRs welcome! See [`CONTRIBUTING.md`](contributing.md).
-
----
+The offline suite enforces 100% line coverage for the `gh_folder_download` package. Network tests use pytest temporary
+directories and are excluded from the default test run. See
+[`contributing.md`](contributing.md) for contribution guidelines.
 
 ## License
 
-MIT License. See [`LICENSE`](license).
+MIT. See [`license`](license).

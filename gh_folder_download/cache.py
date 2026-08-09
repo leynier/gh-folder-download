@@ -3,6 +3,9 @@ Intelligent caching system for gh-folder-download.
 """
 
 import json
+import os
+import shutil
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -61,20 +64,36 @@ class CacheEntry:
 class DownloadCache:
     """Intelligent cache for downloaded files."""
 
-    def __init__(self, cache_dir: Path | None = None):
+    def __init__(
+        self,
+        cache_dir: Path | None = None,
+        max_size_gb: float = 5.0,
+        max_age_days: int = 30,
+        auto_cleanup: bool = True,
+    ):
         self.logger = get_logger()
+        self._lock = threading.RLock()
 
         # Default cache directory
         if cache_dir is None:
-            cache_dir = Path.home() / ".gh-folder-download" / "cache"
+            cache_root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+            cache_dir = cache_root / "gh-folder-download"
 
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.blob_dir = self.cache_dir / "blobs"
+        self.blob_dir.mkdir(parents=True, exist_ok=True)
+        self.max_size_bytes = int(max_size_gb * 1024 * 1024 * 1024)
+        self.max_age_days = max_age_days
+        self.auto_cleanup = auto_cleanup
 
         self.cache_file = self.cache_dir / "cache_metadata.json"
         self.cache_data: dict[str, CacheEntry] = {}
 
         self._load_cache()
+        if self.auto_cleanup:
+            self.clean_cache(self.max_age_days)
+            self.enforce_size_limit(self.max_size_bytes)
 
     def _load_cache(self) -> None:
         """Load cache data from disk."""
@@ -93,9 +112,12 @@ class DownloadCache:
     def _save_cache(self) -> None:
         """Save cache data to disk."""
         try:
-            data = {key: entry.to_dict() for key, entry in self.cache_data.items()}
-            with open(self.cache_file, "w") as f:
+            with self._lock:
+                data = {key: entry.to_dict() for key, entry in self.cache_data.items()}
+            temporary = self.cache_file.with_name(f".{self.cache_file.name}.tmp-{os.getpid()}-{threading.get_ident()}")
+            with open(temporary, "w") as f:
                 json.dump(data, f, indent=2)
+            temporary.replace(self.cache_file)
             self.logger.debug(f"Saved cache with {len(self.cache_data)} entries")
         except OSError as e:
             self.logger.warning(f"Failed to save cache: {e}")
@@ -103,6 +125,17 @@ class DownloadCache:
     def _get_cache_key(self, repo_full_name: str, file_path: str, ref: str) -> str:
         """Generate a unique cache key for a file."""
         return f"{repo_full_name}:{ref}:{file_path}"
+
+    def _get_blob_path(self, sha: str) -> Path:
+        """Return the content-addressed path for a Git object id."""
+        safe_sha = "".join(char for char in sha.lower() if char in "0123456789abcdef")
+        if not safe_sha or safe_sha != sha.lower():
+            # Tests and older metadata may contain non-Git identifiers. Hashing the
+            # identifier keeps the cache path safe while preserving compatibility.
+            import hashlib
+
+            safe_sha = hashlib.sha256(sha.encode()).hexdigest()
+        return self.blob_dir / safe_sha[:2] / safe_sha[2:]
 
     def is_file_cached(
         self,
@@ -129,18 +162,14 @@ class DownloadCache:
         """
         cache_key = self._get_cache_key(repo_full_name, file_path, ref)
 
-        # Check if we have cache entry
-        if cache_key not in self.cache_data:
+        cache_entry = self.cache_data.get(cache_key)
+        if cache_entry is None:
+            cache_entry = next(
+                (entry for entry in self.cache_data.values() if entry.sha == github_sha and entry.size == github_size),
+                None,
+            )
+        if cache_entry is None:
             self.logger.debug(f"No cache entry for {file_path}")
-            return False
-
-        cache_entry = self.cache_data[cache_key]
-
-        # Check if local file still exists
-        if not local_file_path.exists():
-            self.logger.debug(f"Cached file no longer exists: {local_file_path}")
-            # Remove stale cache entry
-            del self.cache_data[cache_key]
             return False
 
         # Check if file is still current
@@ -148,20 +177,56 @@ class DownloadCache:
             self.logger.debug(f"Cache entry outdated for {file_path}")
             return False
 
-        # Verify local file size matches cache
+        blob_path = self._get_blob_path(cache_entry.sha)
+        if not blob_path.is_file():
+            self.logger.debug(f"Cached blob no longer exists: {blob_path}")
+            self._invalidate_sha(cache_entry.sha)
+            return False
+
+        # Verify the cached blob, then materialize it into the requested staging path.
         try:
-            local_size = local_file_path.stat().st_size
-            if local_size != cache_entry.size:
-                self.logger.warning(f"Local file size mismatch for {file_path}")
-                del self.cache_data[cache_key]
+            if blob_path.stat().st_size != cache_entry.size:
+                self.logger.warning(f"Cached blob size mismatch for {file_path}")
+                self._invalidate_sha(cache_entry.sha)
+                blob_path.unlink(missing_ok=True)
                 return False
+
+            if cache_entry.checksums.get("sha256"):
+                import hashlib
+
+                hasher = hashlib.sha256()
+                with open(blob_path, "rb") as file:
+                    while chunk := file.read(8192):
+                        hasher.update(chunk)
+                digest = hasher.hexdigest()
+                if digest != cache_entry.checksums["sha256"]:
+                    self.logger.warning(f"Cached blob checksum mismatch for {file_path}")
+                    self._invalidate_sha(cache_entry.sha)
+                    blob_path.unlink(missing_ok=True)
+                    return False
+
+            local_file_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(blob_path, local_file_path)
+            cache_entry.download_time = time.time()
+            self.cache_data[cache_key] = CacheEntry(
+                file_path=file_path,
+                sha=github_sha,
+                size=github_size,
+                last_modified=cache_entry.last_modified,
+                download_time=cache_entry.download_time,
+                checksums=cache_entry.checksums,
+            )
         except OSError as e:
-            self.logger.warning(f"Failed to check local file size: {e}")
-            del self.cache_data[cache_key]
+            self.logger.warning(f"Failed to restore cached file: {e}")
+            self.cache_data.pop(cache_key, None)
             return False
 
         self.logger.debug(f"File is cached and current: {file_path}")
         return True
+
+    def _invalidate_sha(self, sha: str) -> None:
+        for key in [key for key, entry in self.cache_data.items() if entry.sha == sha]:
+            del self.cache_data[key]
 
     def add_file_to_cache(
         self,
@@ -187,6 +252,16 @@ class DownloadCache:
         """
         cache_key = self._get_cache_key(repo_full_name, file_path, ref)
 
+        blob_path = self._get_blob_path(github_sha)
+        try:
+            blob_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary_blob = blob_path.with_suffix(f".tmp-{time.time_ns()}")
+            shutil.copy2(local_file_path, temporary_blob)
+            temporary_blob.replace(blob_path)
+        except OSError as e:
+            self.logger.warning(f"Failed to store cached blob for {file_path}: {e}")
+            return
+
         # Get file modification time
         try:
             mtime = local_file_path.stat().st_mtime
@@ -210,6 +285,9 @@ class DownloadCache:
         # (every 5 new entries) or when cache is small
         if len(self.cache_data) % 5 == 0 or len(self.cache_data) <= 3:
             self._save_cache()
+
+        if self.auto_cleanup:
+            self.enforce_size_limit(self.max_size_bytes)
 
     def get_cached_checksums(
         self,
@@ -248,10 +326,33 @@ class DownloadCache:
             del self.cache_data[key]
 
         if keys_to_remove:
+            self._remove_orphaned_blobs()
             self._save_cache()
             self.logger.info(f"Cleaned {len(keys_to_remove)} old cache entries")
 
         return len(keys_to_remove)
+
+    def enforce_size_limit(self, max_size_bytes: int | None = None) -> int:
+        """Evict least-recently-used entries until cached blobs fit the limit."""
+        limit = self.max_size_bytes if max_size_bytes is None else max_size_bytes
+        removed = 0
+        while self._blob_size() > limit and self.cache_data:
+            oldest_key = min(self.cache_data, key=lambda key: self.cache_data[key].download_time)
+            del self.cache_data[oldest_key]
+            removed += 1
+            self._remove_orphaned_blobs()
+        if removed:
+            self._save_cache()
+        return removed
+
+    def _blob_size(self) -> int:
+        return sum(path.stat().st_size for path in self.blob_dir.rglob("*") if path.is_file())
+
+    def _remove_orphaned_blobs(self) -> None:
+        referenced = {self._get_blob_path(entry.sha) for entry in self.cache_data.values()}
+        for blob in self.blob_dir.rglob("*"):
+            if blob.is_file() and blob not in referenced:
+                blob.unlink(missing_ok=True)
 
     def get_cache_stats(self) -> dict[str, Any]:
         """Get cache statistics."""
@@ -263,7 +364,7 @@ class DownloadCache:
                 "newest_entry": None,
             }
 
-        total_size = sum(entry.size for entry in self.cache_data.values())
+        total_size = self._blob_size()
         download_times = [entry.download_time for entry in self.cache_data.values()]
 
         return {
@@ -278,11 +379,12 @@ class DownloadCache:
         self.cache_data.clear()
         if self.cache_file.exists():
             self.cache_file.unlink()
+        if self.blob_dir.exists():
+            shutil.rmtree(self.blob_dir)
+        self.blob_dir.mkdir(parents=True, exist_ok=True)
         self.logger.info("Cache cleared")
 
     def finalize(self) -> None:
         """Finalize cache operations (save to disk)."""
-        # Always save to ensure no data loss
-        if self.cache_data:
-            self._save_cache()
-            self.logger.debug("Cache finalized and saved")
+        self._save_cache()
+        self.logger.debug("Cache finalized and saved")

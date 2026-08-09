@@ -1,41 +1,46 @@
 name: Tests
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 7 * * 1"
+
+permissions:
+  contents: read
+
 jobs:
-  tests:
-    env:
-      UV_CACHE_DIR: /tmp/.uv-cache
+  checks:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
-      - name: Set up Python
-        uses: actions/setup-python@v5
+          enable-cache: true
+      - name: Install Python
+        run: uv python install 3.13
+      - name: Run all offline checks
+        run: make check
+
+  integration:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          python-version-file: "pyproject.toml"
-      - name: Set up uv
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
-      - name: Restore uv cache
-        uses: actions/cache@v4
-        with:
-          path: /tmp/.uv-cache
-          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
-            uv-${{ runner.os }}
-      - name: Run tests
-        run: uv run pytest
-
-      - name: Type check
-        run: uv run ty check
-
-      - name: Lint
-        run: uv run ruff check .
-
-      - name: Minimize uv cache
-        run: uv cache prune --ci
+          enable-cache: true
+      - name: Install Python
+        run: uv python install 3.13
+      - name: Run network integration tests
+        run: make integration
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,8 +1,12 @@
 """Tests for file integrity verification."""
 
+import builtins
+import hashlib
+from unittest.mock import Mock
+
 import pytest
 
-from gh_folder_download.integrity import FileIntegrityChecker, IntegrityError
+from gh_folder_download.integrity import FileIntegrityChecker, IntegrityError, quick_integrity_check
 
 
 @pytest.fixture
@@ -61,6 +65,12 @@ class TestCalculateChecksums:
 
         assert "not a file" in str(exc_info.value)
 
+    def test_calculate_checksums_read_error(self, checker, temp_text_file, monkeypatch):
+        monkeypatch.setattr(builtins, "open", Mock(side_effect=OSError("denied")))
+
+        with pytest.raises(IntegrityError, match="Failed to calculate"):
+            checker.calculate_checksums(temp_text_file)
+
 
 class TestVerifyFileSize:
     """Tests for file size verification."""
@@ -86,6 +96,18 @@ class TestVerifyFileSize:
         result = checker.verify_file_size(temp_text_file, None)
 
         assert result is True
+
+    def test_verify_file_size_missing(self, checker, tmp_path):
+        with pytest.raises(IntegrityError, match="does not exist"):
+            checker.verify_file_size(tmp_path / "missing", 1)
+
+    def test_verify_file_size_stat_error(self, checker):
+        path = Mock()
+        path.exists.return_value = True
+        path.stat.side_effect = OSError("denied")
+
+        with pytest.raises(IntegrityError, match="Failed to get file size"):
+            checker.verify_file_size(path, 1)
 
 
 class TestVerifyChecksum:
@@ -117,6 +139,31 @@ class TestVerifyChecksum:
         assert "unsupported" in str(exc_info.value).lower()
 
 
+class TestVerifyGitBlobSha:
+    def test_sha1_and_sha256(self, checker, temp_text_file):
+        content = temp_text_file.read_bytes()
+        payload = f"blob {len(content)}\0".encode() + content
+
+        assert checker.verify_git_blob_sha(temp_text_file, hashlib.sha1(payload).hexdigest())
+        assert checker.verify_git_blob_sha(temp_text_file, hashlib.sha256(payload).hexdigest())
+
+    @pytest.mark.parametrize("sha", ["short", "g" * 40])
+    def test_invalid_sha(self, checker, temp_text_file, sha):
+        with pytest.raises(IntegrityError, match="Unsupported"):
+            checker.verify_git_blob_sha(temp_text_file, sha)
+
+    def test_mismatch(self, checker, temp_text_file):
+        with pytest.raises(IntegrityError, match="mismatch"):
+            checker.verify_git_blob_sha(temp_text_file, "a" * 40)
+
+    def test_stat_error(self, checker):
+        path = Mock()
+        path.stat.side_effect = OSError("denied")
+
+        with pytest.raises(IntegrityError, match="Failed to calculate Git blob"):
+            checker.verify_git_blob_sha(path, "a" * 40)
+
+
 class TestVerifyFileContent:
     """Tests for content verification."""
 
@@ -146,6 +193,26 @@ class TestVerifyFileContent:
 
         assert result["is_empty"] is True
         assert result["size_bytes"] == 0
+
+    def test_verify_file_content_missing(self, checker, tmp_path):
+        with pytest.raises(IntegrityError, match="does not exist"):
+            checker.verify_file_content(tmp_path / "missing")
+
+    def test_verify_file_content_unreadable(self, checker, temp_text_file, monkeypatch):
+        monkeypatch.setattr(builtins, "open", Mock(side_effect=OSError("denied")))
+
+        result = checker.verify_file_content(temp_text_file)
+
+        assert result["is_readable"] is False
+
+    def test_verify_file_content_stat_error(self, checker):
+        path = Mock()
+        path.exists.return_value = True
+        path.is_file.return_value = True
+        path.stat.side_effect = OSError("denied")
+
+        with pytest.raises(IntegrityError, match="Failed to verify content"):
+            checker.verify_file_content(path)
 
 
 class TestComprehensiveVerify:
@@ -201,3 +268,27 @@ class TestCreateIntegrityReport:
 
         assert report["file_exists"] is False
         assert "File does not exist" in report["errors"]
+
+    def test_report_records_individual_verification_errors(self, checker, temp_text_file, monkeypatch):
+        monkeypatch.setattr(checker, "calculate_checksums", Mock(side_effect=IntegrityError("hash")))
+        monkeypatch.setattr(checker, "verify_file_content", Mock(side_effect=IntegrityError("content")))
+
+        report = checker.create_integrity_report(temp_text_file)
+
+        assert report["errors"] == [
+            "Checksum calculation failed: hash",
+            "Content verification failed: content",
+        ]
+
+    def test_report_handles_unexpected_error(self, checker):
+        path = Mock()
+        path.exists.side_effect = RuntimeError("boom")
+
+        report = checker.create_integrity_report(path)
+
+        assert report["errors"] == ["Report generation failed: boom"]
+
+
+def test_quick_integrity_check(temp_text_file):
+    checksum = hashlib.sha256(temp_text_file.read_bytes()).hexdigest()
+    assert quick_integrity_check(temp_text_file, temp_text_file.stat().st_size, checksum) is True

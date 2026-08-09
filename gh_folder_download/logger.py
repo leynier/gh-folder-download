@@ -18,8 +18,9 @@ class GHFolderLogger:
         level: str = "INFO",
         log_file: Path | None = None,
         quiet: bool = False,
+        use_colors: bool = True,
     ):
-        self.console = Console()
+        self.console = Console(no_color=not use_colors)
         self.logger = logging.getLogger("gh-folder-download")
         self.logger.setLevel(logging.DEBUG)  # Always capture all logs
         self.quiet = quiet
@@ -164,10 +165,11 @@ def setup_logger(
     level: str = "INFO",
     log_file: Path | None = None,
     quiet: bool = False,
+    use_colors: bool = True,
 ) -> GHFolderLogger:
     """Setup and return the global logger instance."""
     global _logger
-    _logger = GHFolderLogger(level=level, log_file=log_file, quiet=quiet)
+    _logger = GHFolderLogger(level=level, log_file=log_file, quiet=quiet, use_colors=use_colors)
     return _logger
 
 

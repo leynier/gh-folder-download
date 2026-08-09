@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, cast
 
-from github import Github, GithubException
+from github import Auth, Github, GithubException
 
 from .logger import get_logger
 
@@ -65,8 +65,8 @@ class GitHubRateLimiter:
         self._last_update = 0
 
         # Adaptive delay settings
-        self._base_delay = 0.1  # 100ms base delay
-        self._adaptive_delay = 0.1
+        self._base_delay = 0.0
+        self._adaptive_delay = 0.0
         self._last_request_time = 0
 
         # Initialize rate limit info
@@ -127,7 +127,7 @@ class GitHubRateLimiter:
             return self._base_delay
 
         # Calculate optimal delay to spread requests evenly
-        available_requests = rate_limit.remaining - self.buffer_requests
+        available_requests = rate_limit.remaining - self._effective_buffer(rate_limit)
         if available_requests <= 0:
             # We're in the buffer zone, slow down significantly
             return min(60, remaining_time / 10)  # Up to 1 minute delay
@@ -144,13 +144,16 @@ class GitHubRateLimiter:
             # Medium usage, be somewhat conservative
             adaptive_factor = 1.5
         else:
-            # Low usage, use minimal delay
-            adaptive_factor = 1.0
+            return self._base_delay
 
         delay = max(self._base_delay, optimal_delay * adaptive_factor)
 
         # Cap maximum delay at 30 seconds for normal operations
         return min(30, delay)
+
+    def _effective_buffer(self, rate_limit: RateLimitInfo) -> int:
+        """Keep the configured buffer from exceeding small anonymous quotas."""
+        return min(self.buffer_requests, max(1, int(rate_limit.limit * 0.05)))
 
     def wait_if_needed(self, operation_type: str = "core") -> None:
         """
@@ -171,7 +174,8 @@ class GitHubRateLimiter:
             return
 
         # Check if we're at or near the limit
-        if rate_limit.remaining <= self.buffer_requests:
+        effective_buffer = self._effective_buffer(rate_limit)
+        if rate_limit.remaining <= effective_buffer:
             if rate_limit.remaining <= 0:
                 # Rate limit exceeded, wait for reset
                 wait_time = rate_limit.seconds_until_reset + 1
@@ -201,6 +205,11 @@ class GitHubRateLimiter:
             time.sleep(actual_delay)
 
         self._last_request_time = time.time()
+        with self._lock:
+            tracked = self._search_rate_limit if operation_type == "search" else self._core_rate_limit
+            if tracked is not None and tracked.remaining > 0:
+                tracked.remaining -= 1
+                tracked.used += 1
 
     def get_rate_limit_status(self) -> dict[str, Any]:
         """Get current rate limit status for monitoring."""
@@ -282,7 +291,7 @@ class RateLimitedGitHubClient:
             token: GitHub access token
             buffer_requests: Number of requests to keep as buffer
         """
-        self.github = Github(token)
+        self.github = Github(auth=Auth.Token(token)) if token else Github()
         self.rate_limiter = GitHubRateLimiter(self.github, buffer_requests)
         self.logger = get_logger()
 

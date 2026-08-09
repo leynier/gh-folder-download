@@ -3,6 +3,7 @@
 from unittest.mock import Mock
 
 import pytest
+from github import GithubException
 
 from gh_folder_download.retry import (
     APIRetryHandler,
@@ -139,6 +140,11 @@ class TestIsRetryable:
         """Test KeyError is not retryable."""
         assert self.handler._is_retryable(KeyError("test")) is False
 
+    def test_github_status_and_temporary_message_are_retryable(self):
+        assert self.handler._is_retryable(GithubException(503, "unavailable")) is True
+        assert self.handler._is_retryable(GithubException(404, "missing")) is False
+        assert self.handler._is_retryable(ValueError("temporary network problem")) is True
+
 
 class TestCalculateDelay:
     """Tests for _calculate_delay method."""
@@ -164,6 +170,30 @@ class TestCalculateDelay:
         delay = handler._calculate_delay(5, config)
 
         assert delay <= config.max_delay
+
+    def test_jitter_is_applied(self, monkeypatch):
+        monkeypatch.setattr("random.uniform", lambda _low, _high: 1.5)
+        config = RetryConfig(base_delay=2, jitter=True)
+
+        assert RetryHandler(config)._calculate_delay(0, config) == 3
+
+
+@pytest.mark.parametrize(
+    ("message", "warning"),
+    [
+        ("API rate limit exceeded", "Rate limit exceeded"),
+        ("Resource not accessible", "GitHub permission error"),
+    ],
+)
+def test_github_403_retry_logging(monkeypatch, message, warning):
+    monkeypatch.setattr("gh_folder_download.retry.time.sleep", Mock())
+    handler = RetryHandler(RetryConfig(max_attempts=2, base_delay=0, jitter=False))
+    handler.logger = Mock()
+
+    with pytest.raises(RetryError):
+        handler.retry(Mock(side_effect=GithubException(403, message)))
+
+    assert warning in handler.logger.warning.call_args.args[0]
 
 
 class TestDownloadRetryHandler:
@@ -214,6 +244,12 @@ class TestAPIRetryHandler:
         result = handler.retry_api_call(mock_func, "test_operation")
 
         assert result == {"data": "test"}
+
+    def test_retry_api_call_failure(self):
+        handler = APIRetryHandler(RetryConfig(max_attempts=1, base_delay=0, jitter=False))
+
+        with pytest.raises(RetryError):
+            handler.retry_api_call(Mock(side_effect=ConnectionError("offline")), "contents")
 
 
 class TestWithRetryDecorator:

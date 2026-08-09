@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 from github.ContentFile import ContentFile
+from pathspec import GitIgnoreSpec
 
 from .config import FilterConfig
 from .logger import get_logger
@@ -29,10 +30,8 @@ class FileFilter:
         self.include_patterns = [self._compile_pattern(p) for p in config.include_patterns]
         self.exclude_patterns = [self._compile_pattern(p) for p in config.exclude_patterns]
 
-        # Load gitignore rules if requested
         self.gitignore_rules: list[str] = []
-        if config.respect_gitignore:
-            self.gitignore_rules = self._load_gitignore_patterns()
+        self.gitignore_spec: GitIgnoreSpec | None = None
 
         # Binary file extensions (common binary file types)
         self.binary_extensions = {
@@ -251,91 +250,38 @@ class FileFilter:
 
     def _check_gitignore_filters(self, file_path: str) -> bool:
         """Check gitignore patterns."""
-        if not self.config.respect_gitignore or not self.gitignore_rules:
+        if not self.config.respect_gitignore or self.gitignore_spec is None:
             return True
+        return not self.gitignore_spec.match_file(file_path)
 
-        # Check each gitignore pattern
-        return all(not self._matches_gitignore_pattern(file_path, pattern) for pattern in self.gitignore_rules)
+    def add_gitignore_rules(self, directory: str, lines: list[str]) -> None:
+        """Add rules from a repository .gitignore, scoped to its directory."""
+        base = directory.strip("/")
+        for raw_line in lines:
+            stripped = raw_line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            negated = stripped.startswith("!")
+            rule = stripped[1:] if negated else stripped
+            anchored = rule.startswith("/")
+            rule = rule.lstrip("/")
+            prefix = f"{base}/" if base else ""
+            if anchored or "/" in rule.rstrip("/"):
+                scoped = f"{prefix}{rule}"
+            else:
+                scoped = f"{prefix}**/{rule}"
+                # A double-star prefix does not match a file immediately inside
+                # the base directory with every matcher implementation.
+                direct = f"{prefix}{rule}"
+                self.gitignore_rules.append(f"!{direct}" if negated else direct)
+            self.gitignore_rules.append(f"!{scoped}" if negated else scoped)
+        self.gitignore_spec = GitIgnoreSpec.from_lines(self.gitignore_rules)
 
     def _compile_pattern(self, pattern: str) -> re.Pattern:
         """Convert glob pattern to regex for efficient matching."""
         # Convert glob patterns to regex
         regex_pattern = fnmatch.translate(pattern)
         return re.compile(regex_pattern)
-
-    def _load_gitignore_patterns(self) -> list[str]:
-        """Load gitignore patterns from common gitignore rules."""
-        # Since we're downloading from GitHub, we can't access the actual .gitignore file
-        # So we use common gitignore patterns
-        common_patterns = [
-            # Python
-            "__pycache__/**",
-            "*.pyc",
-            "*.pyo",
-            "*.pyd",
-            ".Python",
-            "build/**",
-            "develop-eggs/**",
-            "dist/**",
-            "downloads/**",
-            "eggs/**",
-            ".eggs/**",
-            "lib/**",
-            "lib64/**",
-            "parts/**",
-            "sdist/**",
-            "var/**",
-            "wheels/**",
-            "*.egg-info/**",
-            ".installed.cfg",
-            "*.egg",
-            # Node.js
-            "node_modules/**",
-            "npm-debug.log*",
-            "yarn-debug.log*",
-            "yarn-error.log*",
-            ".npm",
-            ".eslintcache",
-            # IDEs
-            ".vscode/**",
-            ".idea/**",
-            "*.swp",
-            "*.swo",
-            "*~",
-            # OS
-            ".DS_Store",
-            "Thumbs.db",
-            "ehthumbs.db",
-            "Desktop.ini",
-            # Git
-            ".git/**",
-            ".gitignore",
-            # Logs
-            "*.log",
-            "logs/**",
-            # Temporary files
-            "*.tmp",
-            "*.temp",
-            ".cache/**",
-            ".pytest_cache/**",
-        ]
-
-        self.logger.debug(f"Loaded {len(common_patterns)} common gitignore patterns")
-        return common_patterns
-
-    def _matches_gitignore_pattern(self, file_path: str, pattern: str) -> bool:
-        """Check if file path matches a gitignore pattern."""
-        # Remove leading/trailing whitespace and comments
-        pattern = pattern.strip()
-        if not pattern or pattern.startswith("#"):
-            return False
-
-        # Handle negation patterns (starting with !)
-        if pattern.startswith("!"):
-            return False  # We don't support negation for simplicity
-
-        # Use fnmatch for glob-style matching
-        return fnmatch.fnmatch(file_path, pattern)
 
     def _is_likely_binary_name(self, file_path: str) -> bool:
         """Check if filename suggests it's a binary file."""

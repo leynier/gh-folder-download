@@ -1,5 +1,4 @@
 exclude = [
-    "mesirve/data/migrations",
     ".venv",
     ".git",
     "__pycache__",
@@ -8,7 +7,7 @@ exclude = [
     "tests/downloads",
 ]
 line-length = 120
-target-version = "py312"
+target-version = "py313"
 
 [lint]
 select = [

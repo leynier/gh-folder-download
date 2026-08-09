@@ -3,7 +3,7 @@
 import pytest
 
 from gh_folder_download.config import FilterConfig
-from gh_folder_download.filters import FileFilter, FilterPresets, get_preset_filter
+from gh_folder_download.filters import FileFilter, FilterPresets, create_file_filter, get_preset_filter
 
 
 @pytest.fixture
@@ -121,6 +121,15 @@ class TestBinaryFilter:
         assert file_filter.should_include_file("main.py") is True
         assert file_filter.should_include_file("config.json") is True
 
+    def test_extensionless_binary_name_from_github(self):
+        config = FilterConfig(exclude_binary=True)
+        file_filter = FileFilter(config)
+        content_file = type("Content", (), {"type": "file"})()
+
+        assert file_filter.should_include_file("bin/tool", content_file=content_file) is False
+        assert file_filter.should_include_file("src/tool", content_file=content_file) is True
+        assert file_filter._is_likely_binary_name("bin/tool.txt") is False
+
 
 class TestLargeFileFilter:
     """Tests for large file filtering."""
@@ -143,6 +152,10 @@ class TestLargeFileFilter:
         assert file_filter.should_include_file("file.txt", file_size=10_485_759) is True
         # Just over 10MB
         assert file_filter.should_include_file("file.txt", file_size=10_485_761) is False
+
+    def test_unknown_size_and_disabled_filter(self):
+        assert FileFilter(FilterConfig(exclude_large_files=True))._check_large_file_filter(None) is True
+        assert FileFilter(FilterConfig(exclude_large_files=False))._check_large_file_filter(20_000_000) is True
 
 
 class TestCombinedFilters:
@@ -204,6 +217,13 @@ class TestFilterPresets:
         assert config is not None
         assert len(config.include_extensions) > 0
 
+    @pytest.mark.parametrize(
+        "name",
+        ["config-only", "no-tests", "small-files", "minimal"],
+    )
+    def test_all_other_presets(self, name):
+        assert isinstance(get_preset_filter(name), FilterConfig)
+
     def test_get_preset_filter_invalid(self):
         """Test get_preset_filter with invalid preset name."""
         with pytest.raises(ValueError):
@@ -230,3 +250,33 @@ class TestGetFilterSummary:
         summary = default_filter.get_filter_summary()
 
         assert summary is not None
+
+
+class TestRepositoryGitignore:
+    def test_root_rules_and_negation(self):
+        file_filter = FileFilter(FilterConfig(respect_gitignore=True))
+        file_filter.add_gitignore_rules("", ["*.log", "!keep.log"])
+
+        assert file_filter.should_include_file("debug.log") is False
+        assert file_filter.should_include_file("logs/debug.log") is False
+        assert file_filter.should_include_file("keep.log") is True
+
+    def test_nested_rules_are_scoped(self):
+        file_filter = FileFilter(FilterConfig(respect_gitignore=True))
+        file_filter.add_gitignore_rules("src", ["generated/"])
+
+        assert file_filter.should_include_file("src/generated/output.py") is False
+        assert file_filter.should_include_file("generated/output.py") is True
+
+    def test_comments_blanks_and_anchored_rules(self):
+        file_filter = FileFilter(FilterConfig(respect_gitignore=True))
+        file_filter.add_gitignore_rules("/src/", ["", "# note", "/only.txt", "nested/*.tmp"])
+
+        assert file_filter.should_include_file("src/only.txt") is False
+        assert file_filter.should_include_file("src/nested/file.tmp") is False
+        assert file_filter.should_include_file("only.txt") is True
+
+
+def test_create_file_filter_returns_configured_filter():
+    config = FilterConfig(include_extensions=[".py"])
+    assert create_file_filter(config).config is config

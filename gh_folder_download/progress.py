@@ -188,6 +188,7 @@ class ProgressTracker:
             filename=filename,
         )
         self.file_tasks[file_path] = task_id
+        self.individual_progress[file_path] = 0
         return task_id
 
     def update_file_progress(self, file_path: str, downloaded: int):
@@ -196,6 +197,9 @@ class ProgressTracker:
             return
 
         task_id = self.file_tasks[file_path]
+        previous = self.individual_progress.get(file_path, 0)
+        self.stats.downloaded_bytes = max(0, self.stats.downloaded_bytes + downloaded - previous)
+        self.individual_progress[file_path] = downloaded
         self.progress.update(task_id, completed=downloaded)
 
         # Update overall progress
@@ -212,16 +216,14 @@ class ProgressTracker:
             # Get file size from task if available
             if not self.quiet and file_path in self.file_tasks:
                 task_id = self.file_tasks[file_path]
-                try:
-                    task = self.progress.tasks[task_id]
-                    if task.total:
-                        self.stats.downloaded_bytes += int(task.total)
-                        self.progress.update(task_id, completed=task.total)
-                except (IndexError, KeyError):
-                    # Handle case where task was already removed or doesn't exist
-                    pass
+                task = next((task for task in self.progress.tasks if task.id == task_id), None)
+                if task is not None and task.total:
+                    previous = self.individual_progress.get(file_path, 0)
+                    self.stats.downloaded_bytes += max(0, int(task.total) - previous)
+                    self.progress.update(task_id, completed=task.total)
         else:
             self.stats.failed_files += 1
+            self.stats.downloaded_bytes -= self.individual_progress.get(file_path, 0)
 
         # Remove completed task
         if not self.quiet and file_path in self.file_tasks:
@@ -229,6 +231,7 @@ class ProgressTracker:
             with contextlib.suppress(IndexError, KeyError):
                 self.progress.remove_task(task_id)
             del self.file_tasks[file_path]
+            self.individual_progress.pop(file_path, None)
 
         self._update_overall_progress()
 
@@ -308,6 +311,7 @@ class SimpleProgressTracker:
     def __init__(self):
         self.logger = get_logger()
         self.stats = DownloadStats()
+        self.individual_progress: dict[str, int] = {}
 
     def start_session(self, total_files: int, total_bytes: int):
         """Start a download session."""
@@ -319,11 +323,12 @@ class SimpleProgressTracker:
 
     def add_file_task(self, file_path: str, size: int):
         """Add a file download task (no-op for simple tracker)."""
+        self.individual_progress[file_path] = 0
         return TaskID(0)
 
     def update_file_progress(self, file_path: str, downloaded: int):
-        """Update file progress (no-op for simple tracker)."""
-        pass
+        """Record actual bytes without rendering a progress bar."""
+        self.individual_progress[file_path] = downloaded
 
     def complete_file(self, file_path: str, success: bool, from_cache: bool = False):
         """Mark a file as completed."""
@@ -332,11 +337,13 @@ class SimpleProgressTracker:
         if success:
             if from_cache:
                 self.stats.cached_files += 1
-            # Approximate downloaded bytes
-            avg_size = self.stats.total_bytes // max(1, self.stats.total_files)
-            self.stats.downloaded_bytes += avg_size
+            actual = self.individual_progress.get(file_path, 0)
+            if from_cache and actual == 0:
+                actual = self.stats.total_bytes // max(1, self.stats.total_files)
+            self.stats.downloaded_bytes += actual
         else:
             self.stats.failed_files += 1
+        self.individual_progress.pop(file_path, None)
 
         # Log progress every 10 files or at milestones
         if self.stats.completed_files % 10 == 0 or self.stats.completed_files in [
