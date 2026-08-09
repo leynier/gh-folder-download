@@ -172,7 +172,7 @@ class TestCalculateDelay:
         assert delay <= config.max_delay
 
     def test_jitter_is_applied(self, monkeypatch):
-        monkeypatch.setattr("random.uniform", lambda _low, _high: 1.5)
+        monkeypatch.setattr("gh_folder_download.retry._random.uniform", lambda _low, _high: 1.5)
         config = RetryConfig(base_delay=2, jitter=True)
 
         assert RetryHandler(config)._calculate_delay(0, config) == 3

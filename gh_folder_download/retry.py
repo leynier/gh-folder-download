@@ -3,14 +3,17 @@ Retry mechanism with exponential backoff for gh-folder-download.
 """
 
 import re
+import secrets
 import time
 from collections.abc import Callable
 from functools import wraps
-from typing import Any, cast
+from typing import Any
 
 from github import GithubException
 
 from .logger import get_logger
+
+_random = secrets.SystemRandom()
 
 
 class RetryError(Exception):
@@ -133,7 +136,7 @@ class RetryHandler:
 
         # Check for GitHub API exceptions
         if isinstance(exception, GithubException):
-            return cast(GithubException, exception).status in self.RETRYABLE_GITHUB_STATUS
+            return exception.status in self.RETRYABLE_GITHUB_STATUS
 
         # Check for specific error messages that indicate temporary issues
         error_msg = str(exception).lower()
@@ -157,9 +160,7 @@ class RetryHandler:
 
         # Add jitter to avoid thundering herd problem
         if config.jitter:
-            import random
-
-            jitter_factor = random.uniform(0.5, 1.5)
+            jitter_factor = _random.uniform(0.5, 1.5)
             delay *= jitter_factor
 
         return delay

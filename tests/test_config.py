@@ -118,12 +118,12 @@ def test_loads_first_existing_default_config(monkeypatch, tmp_path):
     assert manager.config_file_path == existing
 
 
-def test_load_resets_previous_config_path(tmp_path):
+def test_load_resets_previous_config_path(tmp_path, monkeypatch):
     file = tmp_path / "config.yaml"
     file.write_text("{}")
     manager = ConfigManager()
     manager.load_config(file)
-    manager.get_config_paths = lambda: []  # type: ignore[method-assign]
+    monkeypatch.setattr(manager, "get_config_paths", lambda: [])
     manager.load_config()
     assert manager.config_file_path is None
 

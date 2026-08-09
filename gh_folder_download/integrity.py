@@ -44,8 +44,10 @@ class FileIntegrityChecker:
 
         checksums = {}
         hash_algorithms = {
-            "md5": hashlib.md5(),
-            "sha1": hashlib.sha1(),
+            # MD5 and SHA-1 remain available for checksum and Git object-id
+            # compatibility; neither is used for cryptographic security.
+            "md5": hashlib.md5(usedforsecurity=False),
+            "sha1": hashlib.sha1(usedforsecurity=False),
             "sha256": hashlib.sha256(),
         }
 
@@ -154,7 +156,7 @@ class FileIntegrityChecker:
 
         try:
             size = file_path.stat().st_size
-            hasher = hashlib.new(algorithm)
+            hasher = hashlib.new(algorithm, usedforsecurity=False)
             hasher.update(f"blob {size}\0".encode())
             with open(file_path, "rb") as file:
                 while chunk := file.read(8192):

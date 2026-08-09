@@ -287,7 +287,7 @@ async def test_successful_download_adds_to_cache(monkeypatch, tmp_path):
 
 def test_retry_delay_is_capped_and_jittered(monkeypatch):
     downloader = ParallelDownloader(use_cache=False, verify_integrity=False, retry_delay=100)
-    monkeypatch.setattr(downloader_module.random, "uniform", lambda _low, _high: 1.0)
+    monkeypatch.setattr(downloader_module._random, "uniform", lambda _low, _high: 1.0)
     assert downloader._retry_delay(3) == 120
 
 
