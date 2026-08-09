@@ -18,6 +18,8 @@ from .integrity import FileIntegrityChecker, IntegrityError
 from .logger import get_logger
 from .progress import ProgressTracker, SimpleProgressTracker
 
+_random = random.SystemRandom()
+
 
 @dataclass
 class DownloadTask:
@@ -156,9 +158,9 @@ class ParallelDownloader:
             results = await asyncio.gather(*download_coroutines, return_exceptions=True)
 
             # Process results and handle exceptions
-            processed_results = []
+            processed_results: list[DownloadResult] = []
             for i, result in enumerate(results):
-                if isinstance(result, Exception):
+                if isinstance(result, BaseException):
                     # Handle exceptions from asyncio.gather
                     error_result = DownloadResult(
                         task=download_tasks[i],
@@ -300,7 +302,7 @@ class ParallelDownloader:
         )
 
     def _retry_delay(self, attempt: int) -> float:
-        return min(120.0, self.retry_delay * (2 ** (attempt - 1))) * random.uniform(0.5, 1.5)
+        return min(120.0, self.retry_delay * (2 ** (attempt - 1))) * _random.uniform(0.5, 1.5)
 
     def _check_cache(self, task: DownloadTask) -> bool:
         """Check if file is available in cache."""
@@ -320,15 +322,14 @@ class ParallelDownloader:
         """Verify file integrity in a thread pool."""
         if not self.integrity_checker:
             return True
+        integrity_checker = self.integrity_checker
 
         def verify():
             try:
-                # Type guard to ensure integrity_checker is not None
-                assert self.integrity_checker is not None
                 checked_path = file_path or task.local_path
-                self.integrity_checker.verify_file_size(checked_path, task.expected_size)
-                self.integrity_checker.verify_git_blob_sha(checked_path, task.sha)
-                self.integrity_checker.verify_file_content(checked_path)
+                integrity_checker.verify_file_size(checked_path, task.expected_size)
+                integrity_checker.verify_git_blob_sha(checked_path, task.sha)
+                integrity_checker.verify_file_content(checked_path)
                 return True
             except IntegrityError as e:
                 self.logger.error(f"Integrity verification failed for {task.file_path}: {e}")
@@ -341,6 +342,7 @@ class ParallelDownloader:
         """Add file to cache in a thread pool."""
         if not self.cache:
             return
+        cache = self.cache
 
         def add_to_cache():
             try:
@@ -349,9 +351,7 @@ class ParallelDownloader:
                 if self.integrity_checker:
                     checksums = self.integrity_checker.calculate_checksums(task.local_path)
 
-                # Type guard to ensure cache is not None
-                assert self.cache is not None
-                self.cache.add_file_to_cache(
+                cache.add_file_to_cache(
                     repo_full_name=task.repo_full_name,
                     file_path=task.file_path,
                     ref=task.ref,

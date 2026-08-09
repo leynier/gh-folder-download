@@ -1,6 +1,7 @@
 """Tests for input validation utilities."""
 
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import Mock
 
 import pytest
@@ -68,7 +69,7 @@ class TestValidateGitHubURL:
 
     def test_validate_github_url_non_string(self):
         with pytest.raises(ValidationError, match="must be a string"):
-            self.validator.parse_github_url(123)  # type: ignore[arg-type]
+            self.validator.parse_github_url(cast(Any, 123))
 
     @pytest.mark.parametrize(
         "url",
@@ -196,7 +197,7 @@ class TestValidateGitHubToken:
 
     def test_token_type_and_whitespace_are_rejected(self):
         with pytest.raises(ValidationError, match="must be a string"):
-            self.validator.validate_github_token(123)  # type: ignore[arg-type]
+            self.validator.validate_github_token(cast(Any, 123))
         with pytest.raises(ValidationError, match="cannot be empty"):
             self.validator.validate_github_token("   ")
 

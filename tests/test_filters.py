@@ -1,6 +1,10 @@
 """Tests for file filtering system."""
 
+from typing import cast
+from unittest.mock import Mock
+
 import pytest
+from github.ContentFile import ContentFile
 
 from gh_folder_download.config import FilterConfig
 from gh_folder_download.filters import FileFilter, FilterPresets, create_file_filter, get_preset_filter
@@ -124,7 +128,9 @@ class TestBinaryFilter:
     def test_extensionless_binary_name_from_github(self):
         config = FilterConfig(exclude_binary=True)
         file_filter = FileFilter(config)
-        content_file = type("Content", (), {"type": "file"})()
+        content_file_mock = Mock(spec=ContentFile)
+        content_file_mock.type = "file"
+        content_file = cast(ContentFile, content_file_mock)
 
         assert file_filter.should_include_file("bin/tool", content_file=content_file) is False
         assert file_filter.should_include_file("src/tool", content_file=content_file) is True

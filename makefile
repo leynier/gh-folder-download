@@ -1,4 +1,4 @@
-.PHONY: install test integration lint typecheck build check
+.PHONY: install test integration lint typecheck security build check
 
 install:
 	uv sync --locked --all-groups --all-extras
@@ -15,6 +15,10 @@ lint:
 
 typecheck:
 	uv run ty check
+
+security: install
+	uv export --all-groups --format requirements-txt --no-hashes | uv run pip-audit -r /dev/stdin
+	uv run bandit -r gh_folder_download -q
 
 build:
 	uv build --no-sources

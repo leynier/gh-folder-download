@@ -14,7 +14,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
@@ -26,7 +26,7 @@ jobs:
           PACKAGE_VERSION=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
           test "${GITHUB_REF_NAME#v}" = "$PACKAGE_VERSION"
       - name: Run release checks
-        run: make check
+        run: make check security
       - name: Smoke test wheel
         run: uv run --isolated --no-project --with "$(find dist -name '*.whl' -print -quit)" gh-folder-download --help
       - name: Smoke test source distribution
@@ -34,7 +34,7 @@ jobs:
       - name: Publish to PyPI
         run: uv publish
       - name: Create GitHub release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           generate_release_notes: true
           files: dist/*
