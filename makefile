@@ -17,8 +17,8 @@ typecheck:
 	uv run ty check
 
 security: install
-	uv export --all-groups --format requirements-txt --no-hashes | uv run pip-audit -r /dev/stdin
-	uv run bandit -r gh_folder_download -q
+	uv export --locked --all-groups --no-emit-project --format requirements-txt | uv run --locked pip-audit --disable-pip --require-hashes -r /dev/stdin
+	uv run --locked bandit -r gh_folder_download -q
 
 build:
 	uv build --no-sources

@@ -21,6 +21,7 @@ requires-python = ">=3.13"
 
 dependencies = [
     "aiohttp>=3.14.3",
+    "certifi>=2026.10.19",
     "pathspec>=1.1.1",
     "pydantic>=2.13.4",
     "pygithub>=2.9.1",
@@ -32,6 +33,8 @@ dependencies = [
 [dependency-groups]
 dev = [
     "bandit>=1.9.4",
+    "filelock>=4.2.1",
+    "pip>=26.2.2",
     "pip-audit>=2.10.1",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
@@ -39,6 +42,9 @@ dev = [
     "ruff>=0.16.2",
     "ty>=0.0.69",
 ]
+
+[tool.uv]
+required-version = ">=0.13.5"
 
 [tool.pytest.ini_options]
 minversion = "6.0"
