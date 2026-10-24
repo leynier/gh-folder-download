@@ -57,6 +57,14 @@ and actively welcome your pull requests:
 The offline test suite measures every maintained `gh_folder_download` module and enforces 100% line coverage. A change
 with an uncovered executable line fails `make check` and the GitHub Actions `checks` job.
 
+### Security tooling
+
+Use uv 0.13.5 or newer and run `make security` to audit all runtime and development dependencies from the locked, hashed export and scan application source with Bandit. The export includes transitive packages; `--disable-pip --require-hashes` prevents pip-audit from resolving or installing them again with pip. Package installation and builds use uv. pip-api can still invoke `pip --version` locally, with pip's version check disabled internally.
+
+The dependency floors cover [certifi's eMudhra trust removal](https://github.com/advisories/GHSA-6q48-6c7w-9gw2), pip's independent certifi bundle, and filelock's patched development dependency. CI pins [uv 0.13.5](https://github.com/astral-sh/uv/releases/tag/0.13.5), which also rejects compromised intermediate keys and selects managed Python builds with patched bundled pip.
+
+As of 2026-10-24, the latest upstream pip, 26.2.2, still vendors urllib3 2.7.0, affected by [GHSA-8988-9cw3-xx77](https://github.com/advisories/GHSA-8988-9cw3-xx77), [GHSA-gh4c-6fx4-qh6g](https://github.com/advisories/GHSA-gh4c-6fx4-qh6g), and [GHSA-vxq7-64xx-v4gw](https://github.com/advisories/GHSA-vxq7-64xx-v4gw). The project's standalone urllib3 is already 2.8.0 and does not replace pip's vendor. The configured audit avoids pip network operations; manually using this development environment's pip to contact package indexes retains that upstream risk until pip publishes an updated vendor. Do not edit installed vendor files or suppress these advisories. A clean lock audit does not audit pip's internal vendor or prove an existing installation or host trust store is patched.
+
 ### Any contributions you make will be under the MIT License
 
 When you submit code changes, your submissions are understood to be under the same [MIT](LICENSE) that covers the project.
